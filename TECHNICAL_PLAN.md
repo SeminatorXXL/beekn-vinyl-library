@@ -4,30 +4,82 @@
 
 ### Flow
 
-1. Request album or search query
-2. Check local database
-3. If missing -> Discogs API
-4. Transform data
-5. Store normalized records
-6. Return internal response
+1. Client calls BVL
+2. BVL checks PostgreSQL first
+3. If vinyl data is missing, BVL calls Discogs
+4. BVL transforms Discogs data into the internal schema
+5. BVL stores normalized records
+6. BVL returns a clean internal response
+
+## Product Scope
+
+BVL is a vinyl-only backend.
+
+The API supports these read scenarios:
+
+* Album overview
+* Album detail
+* Track overview
+* Track detail
+* Artist overview
+* Artist detail
+
+## API Endpoints
+
+```http
+GET /catalog/search?q=
+GET /catalog/albums/search?q=
+GET /catalog/releases/:id
+GET /catalog/tracks/search?q=
+GET /catalog/tracks/:id
+GET /catalog/artists/search?q=
+GET /catalog/artists/:id
+```
+
+Meaning:
+
+* `/catalog/search` and `/catalog/albums/search` return album overview results
+* `/catalog/releases/:id` returns album detail by Discogs release id
+* `/catalog/tracks/search` returns track overview results
+* `/catalog/tracks/:id` returns track detail by internal track id
+* `/catalog/artists/search` returns artist overview results
+* `/catalog/artists/:id` returns artist detail by internal artist id
 
 ## Backend Structure
-
-Recommended folder structure:
 
 ```text
 src/
   controllers/
   routes/
   services/
+    catalog.service.js
     discogs.service.js
     transform.service.js
     ingest.service.js
     search.service.js
   repositories/
   middleware/
+    auth.middleware.js
+    cors.middleware.js
+    error.middleware.js
+    rate-limit.middleware.js
   db/
 ```
+
+## Configuration
+
+Environment variables are loaded through `dotenv`.
+
+Core settings:
+
+* `PORT`
+* `DATABASE_URL`
+* `DISCOGS_TOKEN`
+* `INTERNAL_API_KEY`
+* `ALLOWED_ORIGINS`
+* `API_RATE_LIMIT_WINDOW_MS`
+* `API_RATE_LIMIT_MAX_REQUESTS`
+* `TRUST_PROXY`
 
 ## Database Design
 
@@ -53,6 +105,12 @@ src/
 * id (PK)
 * name
 * sort_name
+* discogs_source_id
+* image_url
+* real_name
+* socials
+* profile_raw_json
+* profile_updated_at
 
 ### album_artists
 
@@ -90,20 +148,70 @@ src/
 * album_id (FK)
 * genre_id (FK)
 
-### album_images
-
-* id (PK)
-* album_id (FK)
-* url
-* type
-* sort_order
-
 ## Database Rules
 
 * Use foreign keys for all relations
-* Add indexes on `albums.title`, `album_sources.source_id`, and `artists.name`
-* Use a unique constraint on `album_sources (source, source_id)`
+* Use parameterized queries only
+* Add a unique constraint on `album_sources (source, source_id)`
 * Keep release data normalized across albums, artists, tracks, and join tables
+
+## Read Models
+
+### Album overview
+
+Fields:
+
+* cover
+* album title
+* main artist or artists
+
+### Album detail
+
+Fields:
+
+* album info
+* vinyl formats
+* main artists
+* support artists
+* tracks
+* track support artists
+
+### Track overview
+
+Fields:
+
+* cover from earliest stored album entry
+* track title
+* artist names
+
+### Track detail
+
+Fields:
+
+* cover from earliest stored album entry
+* track title
+* artist names
+* album appearances
+* position and track number per appearance
+
+### Artist overview
+
+Fields:
+
+* artist picture
+* artist name
+
+### Artist detail
+
+Fields:
+
+* artist picture
+* artist name
+* real name
+* genres
+* socials
+* albums as main artist
+* albums as featured/support artist
 
 ## Services
 
@@ -113,12 +221,13 @@ Responsible for external API calls:
 
 * `fetchRelease(id)`
 * `searchReleases(query)`
+* `fetchArtist(id)`
 
 Rules:
 
 * never log the Discogs token
-* throttle requests
-* convert Discogs failures into generic upstream errors
+* throttle outbound Discogs requests
+* translate Discogs failures to generic upstream errors
 
 ### TransformService
 
@@ -128,9 +237,11 @@ Responsibilities:
 
 * normalize text
 * normalize track positions
-* extract artists
-* map genres
+* normalize artist names
+* map album and track support artists
+* detect vinyl releases
 * sanitize Discogs search results into internal search candidates
+* deduplicate Discogs search candidates by artist + title + year
 
 ### IngestService
 
@@ -138,82 +249,67 @@ Responsible for saving data safely.
 
 Steps:
 
-1. Check if the release already exists via `album_sources.source + source_id`
-2. Insert album
-3. Insert artists if missing
-4. Create album/artist relations
-5. Insert genres and album/genre relations
-6. Insert tracks and track/artist relations
-7. Return the stored album from PostgreSQL
+1. Check whether the exact source record already exists
+2. Check whether the album already exists by identity
+3. Reuse the existing internal album when title + main artist already match
+4. Otherwise insert a new album
+5. Insert artists if missing
+6. Store the Discogs artist id when it is available
+7. Create album/artist relations
+8. Insert genres and album/genre relations
+9. Insert tracks and track/artist relations
+10. Return the stored album from PostgreSQL
 
 ### SearchService
 
-Responsible for orchestrating search.
+Responsible for album overview search.
 
-Steps:
+Rules:
 
-1. Search local database first
-2. If local results are 5 or more, return them
-3. If local results are fewer than 5, search Discogs
-4. Fetch and ingest missing releases
-5. Merge local and newly stored results
-6. Return clean internal search results
+* search local data first
+* if fewer than 5 album results exist, use Discogs fallback
+* only ingest vinyl releases
+* return compact album overviews
+* always return stored normalized album data
+
+### CatalogService
+
+Responsible for read scenarios:
+
+* album overview
+* album detail
+* track overview
+* track detail
+* artist overview
+* artist detail
 
 ## Security
 
 ### Internal API Authentication
 
-Restrict access to trusted clients only.
-
-Use a shared API key via the `Authorization` header:
-
-```js
-function requireApiKey(req, res, next) {
-  const key = req.headers["authorization"];
-  if (!key || key !== `Bearer ${process.env.INTERNAL_API_KEY}`) {
-    return res.status(401).json({ error: "Unauthorized" });
-  }
-  next();
-}
-```
-
-Apply to routes:
-
-```js
-router.use(requireApiKey);
-```
+Use a shared API key via the `Authorization` header.
 
 ### SQL Injection Prevention
 
 Always use parameterized queries.
 
-```js
-await db.query("SELECT * FROM albums WHERE id = $1", [id]);
-```
-
-Never interpolate user input directly into SQL strings.
-
 ### Input Validation
 
-Validate all route params and query params with a schema or explicit checks.
+Validate route params and query params with a schema or explicit checks.
 
 ### CORS
 
-Allow only the BeeVinyl app origin:
-
-```js
-app.use(cors({
-  origin: process.env.ALLOWED_ORIGIN
-}));
-```
+Use a dedicated CORS middleware with an allowlist from `ALLOWED_ORIGINS`.
 
 ### Security Headers
 
-Use Helmet:
+Use Helmet globally.
 
-```js
-app.use(helmet());
-```
+### Rate Limiting
+
+Use an inbound per-IP request limiter.
+
+Discogs outbound throttling remains separate inside `DiscogsService`.
 
 ### Secrets and Logging
 
@@ -221,13 +317,9 @@ app.use(helmet());
 * Never expose raw Discogs JSON in API responses
 * Keep `.env` out of version control
 
-### Rate Limiting
-
-Respect Discogs limits by throttling outbound requests.
-
 ## Search Strategy
 
-Search is local-first with Discogs fallback.
+Album search is local-first with Discogs fallback.
 
 ### Local Search (SQL)
 
@@ -239,98 +331,66 @@ Search these normalized fields:
 
 Use parameterized `ILIKE` queries and return distinct album ids only.
 
-Example:
-
-```sql
-WITH matched_albums AS (
-  SELECT a.id AS album_id, 1 AS match_rank
-  FROM albums a
-  WHERE a.title ILIKE $1 ESCAPE '\'
-
-  UNION ALL
-
-  SELECT aa.album_id, 2 AS match_rank
-  FROM album_artists aa
-  INNER JOIN artists ar ON ar.id = aa.artist_id
-  WHERE ar.name ILIKE $1 ESCAPE '\'
-
-  UNION ALL
-
-  SELECT t.album_id, 3 AS match_rank
-  FROM tracks t
-  WHERE t.title ILIKE $1 ESCAPE '\'
-)
-SELECT album_id
-FROM matched_albums
-GROUP BY album_id
-ORDER BY MIN(match_rank) ASC, MIN(album_id) ASC
-LIMIT $2;
-```
-
 ### Discogs Fallback
 
-If fewer than 5 local results are found:
+If fewer than 5 local album results are found:
 
-1. Call Discogs search API
-2. Transform Discogs search results into release candidates
-3. For each candidate, check `album_sources`
-4. If the release is missing, fetch the full Discogs release
-5. Transform it to the internal schema
-6. Store it through the ingest service
+1. Call the Discogs search API
+2. Transform search results into release candidates
+3. Deduplicate candidates by artist + title + year
+4. Fetch full releases only for missing candidates
+5. Discard non-vinyl releases
+6. Store vinyl releases through the ingest service
 
-### Merge Logic
+### Duplicate Prevention
 
-Merge local and Discogs-backed releases by internal album id.
+Main guard:
+
+* unique `album_sources (source, source_id)`
+
+Additional application-level protection:
+
+* dedupe Discogs search candidates before fetch
+* reuse an existing album when title + main artist already match
+
+## Track Strategy
+
+Track read models are built from stored vinyl releases only.
 
 Rules:
 
-* local results stay first
-* duplicates are removed
-* only internal response fields are returned
-* raw Discogs payloads never leave the backend
+* track overview groups equivalent track rows by title + artist identity
+* the earliest stored album entry provides the overview cover
+* track detail lists all album appearances and positions
 
-### Performance Considerations
+## Artist Strategy
 
-* keep the search target small at first, for example 5 results
-* add indexes on `albums.title`, `artists.name`, and `album_sources.source_id`
-* keep search SQL in the repository layer
-* reuse ingested releases so future requests stay local
-* throttle Discogs requests to avoid rate-limit issues
+Artist read models are built from stored vinyl releases.
 
-## Migrations
+Rules:
 
-Use a migration tool from the start.
-
-Recommended:
-
-* `node-pg-migrate`
-* or Prisma Migrate
-
-Do not manually edit schema in production.
+* local artist search comes from the `artists` table
+* artist image, real name, and socials are enriched from Discogs artist data when needed
+* once artist profile data is fetched, it is stored on the `artists` row for later requests
+* main and featured albums are separated by role
 
 ## Indexing and Performance
-
-Prepare for search scaling.
 
 Recommended:
 
 * btree index on `albums.title`
 * btree index on `artists.name`
+* unique partial index on `artists.discogs_source_id`
 * btree index on `album_sources.source_id`
-* optional GIN index for future full-text search
+* btree index on `tracks.title`
+* optional GIN or trigram indexes for future search tuning
 
-Example:
+## Local Development
 
-```sql
-CREATE INDEX idx_albums_search
-ON albums USING GIN (to_tsvector('english', title));
-```
+Recommended local setup:
 
-## Repository Layer
-
-Repositories must own all SQL.
-
-Controllers should call services and repositories, but must never contain SQL directly.
+* BeeVinyl frontend: `localhost:3000`
+* BVL backend: `localhost:3001`
 
 ## Legal Notes
 
@@ -338,34 +398,9 @@ Controllers should call services and repositories, but must never contain SQL di
 * Always display `Data provided by Discogs` in the frontend
 * Do not expose raw Discogs payloads publicly
 
-## Design Rules
-
-Do:
-
-* normalize data
-* use relations
-* validate input
-* use parameterized queries
-
-Do not:
-
-* trust user input
-* expose raw internal errors
-* expose raw Discogs JSON
-* mix SQL into controllers
-
 ## Roadmap
 
-* caching layer (Redis)
+* Redis-backed rate limiting
 * background workers
 * full-text search
 * performance optimization
-
-## Summary
-
-BVL is a secure, scalable system that:
-
-* fetches data from Discogs only when needed
-* transforms it into a clean internal schema
-* stores it safely in PostgreSQL
-* serves it efficiently from the local database

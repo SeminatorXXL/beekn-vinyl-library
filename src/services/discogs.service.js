@@ -102,9 +102,41 @@ function createDiscogsService(options = {}) {
     });
   }
 
+  async function fetchArtist(id) {
+    return schedule(async () => {
+      const response = await fetchImpl(`${baseUrl}/artists/${id}`, {
+        headers: {
+          Authorization: `Discogs token=${token}`,
+          "User-Agent": userAgent,
+        },
+      });
+
+      if (response.status === 404) {
+        throw new NotFoundError("Artist not found");
+      }
+
+      if (response.status === 429) {
+        throw new ExternalServiceError("Discogs rate limit reached");
+      }
+
+      if (!response.ok) {
+        throw new ExternalServiceError("Failed to fetch artist from Discogs");
+      }
+
+      const payload = await response.json();
+
+      if (!payload || typeof payload !== "object" || !payload.id) {
+        throw new ExternalServiceError("Discogs returned an invalid artist payload");
+      }
+
+      return payload;
+    });
+  }
+
   return {
     fetchRelease,
     searchReleases,
+    fetchArtist,
   };
 }
 

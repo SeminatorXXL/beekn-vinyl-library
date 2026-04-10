@@ -14,6 +14,112 @@ function createCatalogRepository(db) {
       .toLowerCase();
   }
 
+  function parseJsonValue(value, fallbackValue) {
+    if (value == null) {
+      return fallbackValue;
+    }
+
+    if (typeof value === "string") {
+      try {
+        return JSON.parse(value);
+      } catch (error) {
+        return fallbackValue;
+      }
+    }
+
+    return value;
+  }
+
+  function parseRawJson(rawJson) {
+    if (!rawJson) {
+      return null;
+    }
+
+    if (typeof rawJson === "string") {
+      try {
+        return JSON.parse(rawJson);
+      } catch (error) {
+        return null;
+      }
+    }
+
+    return rawJson;
+  }
+
+  function extractFormats(rawJson) {
+    const parsed = parseRawJson(rawJson);
+    const formats = Array.isArray(parsed && parsed.formats) ? parsed.formats : [];
+
+    return formats
+      .map((format) => ({
+        name: format && format.name ? String(format.name).trim() : null,
+        qty: format && format.qty ? String(format.qty).trim() : null,
+        descriptions: Array.isArray(format && format.descriptions)
+          ? format.descriptions.map((description) => String(description).trim()).filter(Boolean)
+          : [],
+      }))
+      .filter((format) => format.name);
+  }
+
+  function extractIsVinyl(rawJson) {
+    return extractFormats(rawJson).some(
+      (format) => normalizeIdentityValue(format.name) === "vinyl"
+    );
+  }
+
+  function mapArtistRecord(row) {
+    const socials = parseJsonValue(row.socials, []);
+
+    return {
+      id: row.id,
+      name: row.name,
+      sortName: row.sort_name,
+      discogsSourceId: row.discogs_source_id || null,
+      imageUrl: row.image_url || null,
+      realName: row.real_name || null,
+      socials: Array.isArray(socials) ? socials.filter(Boolean) : [],
+      profileUpdatedAt: row.profile_updated_at || null,
+    };
+  }
+
+  function isPrimaryRole(role) {
+    const normalizedRole = normalizeIdentityValue(role);
+    return !normalizedRole || normalizedRole === "primary";
+  }
+
+  function mapContributorRow(row) {
+    return {
+      id: row.id,
+      name: row.name,
+      sortName: row.sort_name,
+      role: row.role || "Primary",
+      sortOrder: row.sort_order,
+    };
+  }
+
+  function splitContributors(rows) {
+    const all = [];
+    const main = [];
+    const support = [];
+
+    for (const row of rows) {
+      const contributor = mapContributorRow(row);
+      all.push(contributor);
+
+      if (isPrimaryRole(contributor.role)) {
+        main.push(contributor);
+      } else {
+        support.push(contributor);
+      }
+    }
+
+    return {
+      all,
+      main,
+      support,
+    };
+  }
+
   async function findReleaseBySourceId(source, sourceId, client) {
     const executor = getExecutor(client);
     const result = await executor.query(
@@ -26,7 +132,8 @@ function createCatalogRepository(db) {
           a.created_at,
           s.source,
           s.source_id,
-          s.source_url
+          s.source_url,
+          s.raw_json
         FROM album_sources s
         INNER JOIN albums a ON a.id = s.album_id
         WHERE s.source = $1 AND s.source_id = $2
@@ -55,7 +162,8 @@ function createCatalogRepository(db) {
           a.created_at,
           s.source,
           s.source_id,
-          s.source_url
+          s.source_url,
+          s.raw_json
         FROM albums a
         LEFT JOIN album_sources s
           ON s.album_id = a.id
@@ -78,51 +186,50 @@ function createCatalogRepository(db) {
   async function hydrateRelease(baseAlbum, client) {
     const executor = getExecutor(client);
 
-    const [albumArtistsResult, genresResult, tracksResult] = await Promise.all([
-      executor.query(
-        `
-          SELECT
-            ar.id,
-            ar.name,
-            ar.sort_name,
-            aa.role,
-            aa.sort_order
-          FROM album_artists aa
-          INNER JOIN artists ar ON ar.id = aa.artist_id
-          WHERE aa.album_id = $1
-          ORDER BY aa.sort_order ASC, aa.id ASC
-        `,
-        [baseAlbum.id]
-      ),
-      executor.query(
-        `
-          SELECT
-            g.id,
-            g.name
-          FROM album_genres ag
-          INNER JOIN genres g ON g.id = ag.genre_id
-          WHERE ag.album_id = $1
-          ORDER BY g.name ASC
-        `,
-        [baseAlbum.id]
-      ),
-      executor.query(
-        `
-          SELECT
-            id,
-            album_id,
-            position,
-            track_number,
-            title,
-            duration
-          FROM tracks
-          WHERE album_id = $1
-          ORDER BY id ASC
-        `,
-        [baseAlbum.id]
-      ),
-    ]);
+    const albumArtistsResult = await executor.query(
+      `
+        SELECT
+          ar.id,
+          ar.name,
+          ar.sort_name,
+          aa.role,
+          aa.sort_order
+        FROM album_artists aa
+        INNER JOIN artists ar ON ar.id = aa.artist_id
+        WHERE aa.album_id = $1
+        ORDER BY aa.sort_order ASC, aa.id ASC
+      `,
+      [baseAlbum.id]
+    );
+    const genresResult = await executor.query(
+      `
+        SELECT
+          g.id,
+          g.name
+        FROM album_genres ag
+        INNER JOIN genres g ON g.id = ag.genre_id
+        WHERE ag.album_id = $1
+        ORDER BY g.name ASC
+      `,
+      [baseAlbum.id]
+    );
+    const tracksResult = await executor.query(
+      `
+        SELECT
+          id,
+          album_id,
+          position,
+          track_number,
+          title,
+          duration
+        FROM tracks
+        WHERE album_id = $1
+        ORDER BY id ASC
+      `,
+      [baseAlbum.id]
+    );
 
+    const albumArtistGroups = splitContributors(albumArtistsResult.rows);
     const tracks = tracksResult.rows;
     const trackIds = tracks.map((track) => track.id);
     let trackArtistsByTrackId = new Map();
@@ -147,13 +254,7 @@ function createCatalogRepository(db) {
 
       trackArtistsByTrackId = trackArtistsResult.rows.reduce((groups, row) => {
         const current = groups.get(row.track_id) || [];
-        current.push({
-          id: row.id,
-          name: row.name,
-          sortName: row.sort_name,
-          role: row.role,
-          sortOrder: row.sort_order,
-        });
+        current.push(row);
         groups.set(row.track_id, current);
         return groups;
       }, new Map());
@@ -165,30 +266,34 @@ function createCatalogRepository(db) {
       year: baseAlbum.year,
       coverUrl: baseAlbum.cover_url,
       createdAt: baseAlbum.created_at,
+      isVinyl: extractIsVinyl(baseAlbum.raw_json),
+      formats: extractFormats(baseAlbum.raw_json),
       source: {
         provider: baseAlbum.source,
         sourceId: baseAlbum.source_id,
         sourceUrl: baseAlbum.source_url,
       },
-      artists: albumArtistsResult.rows.map((row) => ({
-        id: row.id,
-        name: row.name,
-        sortName: row.sort_name,
-        role: row.role,
-        sortOrder: row.sort_order,
-      })),
+      artists: albumArtistGroups.all,
+      mainArtists: albumArtistGroups.main,
+      supportArtists: albumArtistGroups.support,
       genres: genresResult.rows.map((row) => ({
         id: row.id,
         name: row.name,
       })),
-      tracks: tracks.map((track) => ({
-        id: track.id,
-        position: track.position,
-        trackNumber: track.track_number,
-        title: track.title,
-        duration: track.duration,
-        artists: trackArtistsByTrackId.get(track.id) || [],
-      })),
+      tracks: tracks.map((track) => {
+        const trackArtistGroups = splitContributors(trackArtistsByTrackId.get(track.id) || []);
+
+        return {
+          id: track.id,
+          position: track.position,
+          trackNumber: track.track_number,
+          title: track.title,
+          duration: track.duration,
+          artists: trackArtistGroups.all,
+          mainArtists: trackArtistGroups.main,
+          supportArtists: trackArtistGroups.support,
+        };
+      }),
     };
   }
 
@@ -221,7 +326,15 @@ function createCatalogRepository(db) {
     const executor = getExecutor(client);
     const result = await executor.query(
       `
-        SELECT id, name, sort_name
+        SELECT
+          id,
+          name,
+          sort_name,
+          discogs_source_id,
+          image_url,
+          real_name,
+          socials,
+          profile_updated_at
         FROM artists
         WHERE LOWER(name) = LOWER($1)
         LIMIT 1
@@ -229,21 +342,112 @@ function createCatalogRepository(db) {
       [name]
     );
 
-    return result.rows[0] || null;
+    return result.rows[0] ? mapArtistRecord(result.rows[0]) : null;
+  }
+
+  async function findArtistByDiscogsSourceId(sourceId, client) {
+    const executor = getExecutor(client);
+    const result = await executor.query(
+      `
+        SELECT
+          id,
+          name,
+          sort_name,
+          discogs_source_id,
+          image_url,
+          real_name,
+          socials,
+          profile_updated_at
+        FROM artists
+        WHERE discogs_source_id = $1
+        LIMIT 1
+      `,
+      [sourceId]
+    );
+
+    return result.rows[0] ? mapArtistRecord(result.rows[0]) : null;
   }
 
   async function insertArtist(artist, client) {
     const executor = getExecutor(client);
     const result = await executor.query(
       `
-        INSERT INTO artists (name, sort_name)
-        VALUES ($1, $2)
-        RETURNING id, name, sort_name
+        INSERT INTO artists (name, sort_name, discogs_source_id)
+        VALUES ($1, $2, $3)
+        RETURNING
+          id,
+          name,
+          sort_name,
+          discogs_source_id,
+          image_url,
+          real_name,
+          socials,
+          profile_updated_at
       `,
-      [artist.name, artist.sortName]
+      [artist.name, artist.sortName, artist.sourceId || null]
     );
 
-    return result.rows[0];
+    return mapArtistRecord(result.rows[0]);
+  }
+
+  async function updateArtistSourceId(artistId, sourceId, client) {
+    if (!sourceId) {
+      return null;
+    }
+
+    const executor = getExecutor(client);
+    const result = await executor.query(
+      `
+        UPDATE artists
+        SET discogs_source_id = COALESCE(discogs_source_id, $2)
+        WHERE id = $1
+        RETURNING
+          id,
+          name,
+          sort_name,
+          discogs_source_id,
+          image_url,
+          real_name,
+          socials,
+          profile_updated_at
+      `,
+      [artistId, sourceId]
+    );
+
+    return result.rows[0] ? mapArtistRecord(result.rows[0]) : null;
+  }
+
+  async function saveArtistProfile(artistId, profile, client) {
+    const executor = getExecutor(client);
+    const result = await executor.query(
+      `
+        UPDATE artists
+        SET image_url = $2,
+            real_name = $3,
+            socials = $4::jsonb,
+            profile_raw_json = $5::jsonb,
+            profile_updated_at = NOW()
+        WHERE id = $1
+        RETURNING
+          id,
+          name,
+          sort_name,
+          discogs_source_id,
+          image_url,
+          real_name,
+          socials,
+          profile_updated_at
+      `,
+      [
+        artistId,
+        profile.imageUrl || null,
+        profile.realName || null,
+        JSON.stringify(Array.isArray(profile.socials) ? profile.socials : []),
+        JSON.stringify(profile.rawJson || null),
+      ]
+    );
+
+    return result.rows[0] ? mapArtistRecord(result.rows[0]) : null;
   }
 
   async function linkAlbumArtist(albumId, artistId, role, sortOrder, client) {
@@ -396,7 +600,7 @@ function createCatalogRepository(db) {
         continue;
       }
 
-      const releaseArtistNames = release.artists
+      const releaseArtistNames = release.mainArtists
         .map((artist) => normalizeIdentityValue(artist.name))
         .filter(Boolean);
 
@@ -411,13 +615,301 @@ function createCatalogRepository(db) {
     return null;
   }
 
+  async function getTrackById(trackId, client) {
+    const executor = getExecutor(client);
+    const result = await executor.query(
+      `
+        SELECT
+          t.id,
+          t.album_id,
+          t.position,
+          t.track_number,
+          t.title,
+          t.duration,
+          a.title AS album_title,
+          a.year AS album_year,
+          a.cover_url AS album_cover_url
+        FROM tracks t
+        INNER JOIN albums a ON a.id = t.album_id
+        WHERE t.id = $1
+        LIMIT 1
+      `,
+      [trackId]
+    );
+
+    const baseTrack = result.rows[0];
+    if (!baseTrack) {
+      return null;
+    }
+
+    return hydrateTrack(baseTrack, client);
+  }
+
+  async function hydrateTrack(baseTrack, client) {
+    const executor = getExecutor(client);
+    const trackArtistsResult = await executor.query(
+      `
+        SELECT
+          ar.id,
+          ar.name,
+          ar.sort_name,
+          ta.role,
+          ta.sort_order
+        FROM track_artists ta
+        INNER JOIN artists ar ON ar.id = ta.artist_id
+        WHERE ta.track_id = $1
+        ORDER BY ta.sort_order ASC, ta.id ASC
+      `,
+      [baseTrack.id]
+    );
+    const albumArtistsResult = await executor.query(
+      `
+        SELECT
+          ar.id,
+          ar.name,
+          ar.sort_name,
+          aa.role,
+          aa.sort_order
+        FROM album_artists aa
+        INNER JOIN artists ar ON ar.id = aa.artist_id
+        WHERE aa.album_id = $1
+        ORDER BY aa.sort_order ASC, aa.id ASC
+      `,
+      [baseTrack.album_id]
+    );
+
+    const trackArtistGroups = splitContributors(trackArtistsResult.rows);
+    const albumArtistGroups = splitContributors(albumArtistsResult.rows);
+
+    return {
+      id: baseTrack.id,
+      title: baseTrack.title,
+      position: baseTrack.position,
+      trackNumber: baseTrack.track_number,
+      duration: baseTrack.duration,
+      artists: trackArtistGroups.all,
+      mainArtists: trackArtistGroups.main,
+      supportArtists: trackArtistGroups.support,
+      album: {
+        id: baseTrack.album_id,
+        title: baseTrack.album_title,
+        year: baseTrack.album_year,
+        coverUrl: baseTrack.album_cover_url,
+        mainArtists: albumArtistGroups.main,
+      },
+    };
+  }
+
+  async function searchTracksByQuery(searchQuery, limit, client) {
+    const executor = getExecutor(client);
+    const likeQuery = `%${escapeLikePattern(searchQuery)}%`;
+    const result = await executor.query(
+      `
+        WITH matched_tracks AS (
+          SELECT t.id AS track_id, 1 AS match_rank
+          FROM tracks t
+          WHERE t.title ILIKE $1 ESCAPE '\\'
+
+          UNION ALL
+
+          SELECT ta.track_id, 2 AS match_rank
+          FROM track_artists ta
+          INNER JOIN artists ar ON ar.id = ta.artist_id
+          WHERE ar.name ILIKE $1 ESCAPE '\\'
+        )
+        SELECT track_id
+        FROM matched_tracks
+        GROUP BY track_id
+        ORDER BY MIN(match_rank) ASC, MIN(track_id) ASC
+        LIMIT $2
+      `,
+      [likeQuery, limit]
+    );
+
+    const tracks = [];
+
+    for (const row of result.rows) {
+      const track = await getTrackById(row.track_id, client);
+      if (track) {
+        tracks.push(track);
+      }
+    }
+
+    return tracks;
+  }
+
+  async function findTracksByNormalizedTitle(title, limit = 100, client) {
+    const executor = getExecutor(client);
+    const normalizedTitle = normalizeIdentityValue(title);
+    const result = await executor.query(
+      `
+        SELECT
+          t.id,
+          t.album_id,
+          t.position,
+          t.track_number,
+          t.title,
+          t.duration,
+          a.title AS album_title,
+          a.year AS album_year,
+          a.cover_url AS album_cover_url
+        FROM tracks t
+        INNER JOIN albums a ON a.id = t.album_id
+        WHERE LOWER(TRIM(t.title)) = $1
+        ORDER BY a.year ASC NULLS LAST, t.album_id ASC, t.id ASC
+        LIMIT $2
+      `,
+      [normalizedTitle, limit]
+    );
+
+    const tracks = [];
+
+    for (const row of result.rows) {
+      const track = await hydrateTrack(row, client);
+      if (track) {
+        tracks.push(track);
+      }
+    }
+
+    return tracks;
+  }
+
+  async function searchArtistsByQuery(searchQuery, limit, client) {
+    const executor = getExecutor(client);
+    const likeQuery = `%${escapeLikePattern(searchQuery)}%`;
+    const result = await executor.query(
+      `
+        SELECT
+          id,
+          name,
+          sort_name,
+          discogs_source_id,
+          image_url,
+          real_name,
+          socials,
+          profile_updated_at
+        FROM artists
+        WHERE name ILIKE $1 ESCAPE '\\'
+        ORDER BY name ASC, id ASC
+        LIMIT $2
+      `,
+      [likeQuery, limit]
+    );
+
+    return result.rows.map(mapArtistRecord);
+  }
+
+  async function getArtistById(artistId, client) {
+    const executor = getExecutor(client);
+    const result = await executor.query(
+      `
+        SELECT
+          id,
+          name,
+          sort_name,
+          discogs_source_id,
+          image_url,
+          real_name,
+          socials,
+          profile_updated_at
+        FROM artists
+        WHERE id = $1
+        LIMIT 1
+      `,
+      [artistId]
+    );
+
+    const artist = result.rows[0];
+    if (!artist) {
+      return null;
+    }
+
+    return mapArtistRecord(artist);
+  }
+
+  async function getGenresByArtistId(artistId, client) {
+    const executor = getExecutor(client);
+    const result = await executor.query(
+      `
+        SELECT DISTINCT g.id, g.name
+        FROM album_artists aa
+        INNER JOIN album_genres ag ON ag.album_id = aa.album_id
+        INNER JOIN genres g ON g.id = ag.genre_id
+        WHERE aa.artist_id = $1
+        ORDER BY g.name ASC
+      `,
+      [artistId]
+    );
+
+    return result.rows.map((row) => ({
+      id: row.id,
+      name: row.name,
+    }));
+  }
+
+  async function getAlbumsByArtistRole(artistId, roleMode, client) {
+    const executor = getExecutor(client);
+    const condition =
+      roleMode === "featured"
+        ? "COALESCE(NULLIF(LOWER(BTRIM(aa.role)), ''), 'primary') <> 'primary'"
+        : "COALESCE(NULLIF(LOWER(BTRIM(aa.role)), ''), 'primary') = 'primary'";
+
+    const result = await executor.query(
+      `
+        SELECT DISTINCT aa.album_id
+        FROM album_artists aa
+        WHERE aa.artist_id = $1
+          AND ${condition}
+        ORDER BY aa.album_id ASC
+      `,
+      [artistId]
+    );
+
+    const releases = [];
+
+    for (const row of result.rows) {
+      const release = await getReleaseByAlbumId(row.album_id, client);
+      if (release) {
+        releases.push(release);
+      }
+    }
+
+    return releases;
+  }
+
+  async function findArtistSourcePayloads(artistId, limit = 10, client) {
+    const executor = getExecutor(client);
+    const result = await executor.query(
+      `
+        SELECT s.raw_json
+        FROM album_artists aa
+        INNER JOIN album_sources s
+          ON s.album_id = aa.album_id
+         AND s.source = 'discogs'
+        INNER JOIN albums a ON a.id = aa.album_id
+        WHERE aa.artist_id = $1
+          AND s.raw_json IS NOT NULL
+        ORDER BY a.year ASC NULLS LAST, s.id ASC
+        LIMIT $2
+      `,
+      [artistId, limit]
+    );
+
+    return result.rows
+      .map((row) => parseRawJson(row.raw_json))
+      .filter(Boolean);
+  }
+
   return {
     findReleaseBySourceId,
     getReleaseByAlbumId,
     insertAlbum,
     insertAlbumSource,
     findArtistByName,
+    findArtistByDiscogsSourceId,
     insertArtist,
+    updateArtistSourceId,
+    saveArtistProfile,
     linkAlbumArtist,
     insertTrack,
     linkTrackArtist,
@@ -426,6 +918,14 @@ function createCatalogRepository(db) {
     linkAlbumGenre,
     searchLocalReleases,
     findReleaseByAlbumIdentity,
+    getTrackById,
+    searchTracksByQuery,
+    findTracksByNormalizedTitle,
+    searchArtistsByQuery,
+    getArtistById,
+    getGenresByArtistId,
+    getAlbumsByArtistRole,
+    findArtistSourcePayloads,
   };
 }
 

@@ -7,23 +7,15 @@ function createSearchService({
   const targetResultCount = 5;
   const discogsSearchPageSize = 10;
 
-  function toSearchResult(release) {
+  function toAlbumOverview(release) {
     return {
       id: release.id,
       title: release.title,
-      year: release.year,
       coverUrl: release.coverUrl,
-      source: release.source,
-      artists: release.artists.map((artist) => ({
+      mainArtists: release.mainArtists.map((artist) => ({
         id: artist.id,
         name: artist.name,
-        role: artist.role,
       })),
-      genres: release.genres.map((genre) => ({
-        id: genre.id,
-        name: genre.name,
-      })),
-      trackCount: Array.isArray(release.tracks) ? release.tracks.length : 0,
     };
   }
 
@@ -31,7 +23,7 @@ function createSearchService({
     const byAlbumId = new Map();
 
     for (const release of releases) {
-      if (!release) {
+      if (!release || release.isVinyl === false) {
         continue;
       }
 
@@ -42,10 +34,12 @@ function createSearchService({
   }
 
   async function search(query) {
-    const localResults = await catalogRepository.searchLocalReleases(query, targetResultCount);
+    const localResults = (await catalogRepository.searchLocalReleases(query, targetResultCount)).filter(
+      (release) => release.isVinyl !== false
+    );
 
     if (localResults.length >= targetResultCount) {
-      return localResults.map(toSearchResult);
+      return localResults.map(toAlbumOverview);
     }
 
     const discogsSearch = await discogsService.searchReleases(query, {
@@ -65,19 +59,26 @@ function createSearchService({
       );
 
       if (existingRelease) {
-        combinedReleases.push(existingRelease);
+        if (existingRelease.isVinyl !== false) {
+          combinedReleases.push(existingRelease);
+        }
         continue;
       }
 
       const discogsRelease = await discogsService.fetchRelease(candidate.sourceId);
       const mappedRelease = transformService.mapRelease(discogsRelease);
+
+      if (!mappedRelease.album.isVinyl) {
+        continue;
+      }
+
       const storedRelease = await ingestService.saveRelease(mappedRelease);
       combinedReleases.push(storedRelease);
     }
 
     return mergeUniqueResults(combinedReleases)
       .slice(0, targetResultCount)
-      .map(toSearchResult);
+      .map(toAlbumOverview);
   }
 
   return {

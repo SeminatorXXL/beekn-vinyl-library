@@ -1,50 +1,36 @@
 const { z } = require("zod");
 const { BadRequestError } = require("../errors/app-error");
 
-const releaseIdSchema = z.object({
+const entityIdSchema = z.object({
   id: z
     .string()
     .trim()
-    .regex(/^\d+$/, "Release id must be a positive integer")
+    .regex(/^\d+$/, "Id must be a positive integer")
     .transform((value) => Number.parseInt(value, 10))
-    .refine((value) => Number.isSafeInteger(value) && value > 0, "Release id must be a positive integer"),
+    .refine((value) => Number.isSafeInteger(value) && value > 0, "Id must be a positive integer"),
 });
 
 const searchQuerySchema = z.object({
   q: z.string().trim().min(1, "Search query is required"),
 });
 
-function createCatalogController({
-  catalogRepository,
-  discogsService,
-  transformService,
-  ingestService,
-  searchService,
-}) {
+function createCatalogController({ catalogService }) {
   async function getReleaseById(req, res, next) {
     try {
-      const parsedParams = releaseIdSchema.safeParse(req.params);
+      const parsedParams = entityIdSchema.safeParse(req.params);
 
       if (!parsedParams.success) {
         throw new BadRequestError("Invalid release id");
       }
 
-      const releaseId = parsedParams.data.id;
-      let release = await catalogRepository.findReleaseBySourceId("discogs", String(releaseId));
-
-      if (!release) {
-        const discogsRelease = await discogsService.fetchRelease(releaseId);
-        const mappedRelease = transformService.mapRelease(discogsRelease);
-        release = await ingestService.saveRelease(mappedRelease);
-      }
-
+      const release = await catalogService.getAlbumDetailByReleaseId(parsedParams.data.id);
       res.status(200).json({ data: release });
     } catch (error) {
       next(error);
     }
   }
 
-  async function searchCatalog(req, res, next) {
+  async function searchAlbums(req, res, next) {
     try {
       const parsedQuery = searchQuerySchema.safeParse(req.query);
 
@@ -52,8 +38,7 @@ function createCatalogController({
         throw new BadRequestError("Invalid search query");
       }
 
-      const results = await searchService.search(parsedQuery.data.q);
-
+      const results = await catalogService.searchAlbums(parsedQuery.data.q);
       res.status(200).json({
         data: {
           query: parsedQuery.data.q,
@@ -66,9 +51,85 @@ function createCatalogController({
     }
   }
 
+  async function searchTracks(req, res, next) {
+    try {
+      const parsedQuery = searchQuerySchema.safeParse(req.query);
+
+      if (!parsedQuery.success) {
+        throw new BadRequestError("Invalid search query");
+      }
+
+      const results = await catalogService.searchTracks(parsedQuery.data.q);
+      res.status(200).json({
+        data: {
+          query: parsedQuery.data.q,
+          count: results.length,
+          results,
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async function getTrackById(req, res, next) {
+    try {
+      const parsedParams = entityIdSchema.safeParse(req.params);
+
+      if (!parsedParams.success) {
+        throw new BadRequestError("Invalid track id");
+      }
+
+      const track = await catalogService.getTrackDetail(parsedParams.data.id);
+      res.status(200).json({ data: track });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async function searchArtists(req, res, next) {
+    try {
+      const parsedQuery = searchQuerySchema.safeParse(req.query);
+
+      if (!parsedQuery.success) {
+        throw new BadRequestError("Invalid search query");
+      }
+
+      const results = await catalogService.searchArtists(parsedQuery.data.q);
+      res.status(200).json({
+        data: {
+          query: parsedQuery.data.q,
+          count: results.length,
+          results,
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async function getArtistById(req, res, next) {
+    try {
+      const parsedParams = entityIdSchema.safeParse(req.params);
+
+      if (!parsedParams.success) {
+        throw new BadRequestError("Invalid artist id");
+      }
+
+      const artist = await catalogService.getArtistDetail(parsedParams.data.id);
+      res.status(200).json({ data: artist });
+    } catch (error) {
+      next(error);
+    }
+  }
+
   return {
     getReleaseById,
-    searchCatalog,
+    searchAlbums,
+    searchTracks,
+    getTrackById,
+    searchArtists,
+    getArtistById,
   };
 }
 

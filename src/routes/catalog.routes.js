@@ -7,8 +7,16 @@ function createCatalogRouter(dependencies) {
   const controller = createCatalogController(dependencies);
 
   router.use(requireApiKey);
-  router.get("/search", controller.searchCatalog);
+
+  router.get("/search", controller.searchAlbums);
+  router.get("/albums/search", controller.searchAlbums);
   router.get("/releases/:id", controller.getReleaseById);
+
+  router.get("/tracks/search", controller.searchTracks);
+  router.get("/tracks/:id", controller.getTrackById);
+
+  router.get("/artists/search", controller.searchArtists);
+  router.get("/artists/:id", controller.getArtistById);
 
   return router;
 }

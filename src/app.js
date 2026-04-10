@@ -6,6 +6,7 @@ const { createDiscogsService } = require("./services/discogs.service");
 const { createTransformService } = require("./services/transform.service");
 const { createIngestService } = require("./services/ingest.service");
 const { createSearchService } = require("./services/search.service");
+const { createCatalogService } = require("./services/catalog.service");
 const { createCatalogRouter } = require("./routes/catalog.routes");
 const { createCorsMiddleware } = require("./middleware/cors.middleware");
 const { createRateLimitMiddleware } = require("./middleware/rate-limit.middleware");
@@ -28,6 +29,13 @@ function createApp() {
     transformService,
     ingestService,
   });
+  const catalogService = createCatalogService({
+    catalogRepository,
+    discogsService,
+    transformService,
+    ingestService,
+    searchService,
+  });
 
   app.use(createCorsMiddleware());
   app.use(helmet());
@@ -37,11 +45,7 @@ function createApp() {
   app.use(
     "/catalog",
     createCatalogRouter({
-      catalogRepository,
-      discogsService,
-      transformService,
-      ingestService,
-      searchService,
+      catalogService,
     })
   );
 

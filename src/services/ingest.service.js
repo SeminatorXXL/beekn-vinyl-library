@@ -14,7 +14,7 @@ function createIngestService({ db, catalogRepository }) {
 
         const identityMatch = await catalogRepository.findReleaseByAlbumIdentity(
           mappedRelease.album.title,
-          mappedRelease.artists,
+          mappedRelease.mainArtists,
           mappedRelease.album.year,
           client
         );
@@ -31,13 +31,26 @@ function createIngestService({ db, catalogRepository }) {
         const genreIdCache = new Map();
 
         async function getArtistId(artist) {
-          const cacheKey = artist.name.toLowerCase();
+          const cacheKey = (artist.sourceId || artist.name || "").toLowerCase();
           if (artistIdCache.has(cacheKey)) {
             return artistIdCache.get(cacheKey);
           }
 
-          const existingArtist = await catalogRepository.findArtistByName(artist.name, client);
+          const existingArtistBySourceId = artist.sourceId
+            ? await catalogRepository.findArtistByDiscogsSourceId(artist.sourceId, client)
+            : null;
+          const existingArtist =
+            existingArtistBySourceId || (await catalogRepository.findArtistByName(artist.name, client));
           const persistedArtist = existingArtist || (await catalogRepository.insertArtist(artist, client));
+
+          if (artist.sourceId && persistedArtist.discogsSourceId !== artist.sourceId) {
+            await catalogRepository.updateArtistSourceId(
+              persistedArtist.id,
+              artist.sourceId,
+              client
+            );
+          }
+
           artistIdCache.set(cacheKey, persistedArtist.id);
           return persistedArtist.id;
         }

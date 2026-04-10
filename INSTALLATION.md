@@ -12,25 +12,35 @@ It assumes:
 
 * the domain `beekn.nl` is managed in Strato
 * the subdomain `bvl.beekn.nl` already exists
-* BVL will run on a Linux server or VPS with a public IP
+* BVL will run on a Linux VPS or server with a public IP
 * PostgreSQL is available on that server or on another reachable server
 
 Important:
 
-* If you only have shared hosting and no VPS/server, this Node.js setup usually will not work well
-* In that case, you need a VPS, cloud server, or another host that supports long-running Node.js apps
+* if you only have shared hosting and no VPS, this Node.js setup is not the right fit
+* in that case you need a VPS or another host that supports long-running Node.js processes
 
-## Overview
+## Recommended Server Size
 
-The final setup looks like this:
+For BVL with Node.js, PostgreSQL, Nginx, and PM2 on the same VPS:
+
+* `VC 1-1`: not recommended
+* `VC 1-2`: okay for experiments only
+* `VC 2-4`: recommended minimum for production
+
+## Final Setup
 
 ```text
 browser
   -> https://bvl.beekn.nl
   -> Nginx
-  -> Node.js / Express app
+  -> Node.js / Express app on 127.0.0.1:3001
   -> PostgreSQL
 ```
+
+Using port `3001` internally keeps port planning simple and matches the recommended local development setup.
+
+BVL serves a vinyl-only catalog and supports album, track, and artist endpoints.
 
 ## 1. Point the Subdomain to Your Server
 
@@ -51,9 +61,7 @@ TTL: default
 
 If your server also has IPv6, add an `AAAA` record too.
 
-After saving, DNS propagation can take some time.
-
-You can test it with:
+Test later with:
 
 ```bash
 nslookup bvl.beekn.nl
@@ -63,22 +71,10 @@ nslookup bvl.beekn.nl
 
 These steps assume Ubuntu 22.04 or 24.04.
 
-Update the server:
-
 ```bash
 sudo apt update
 sudo apt upgrade -y
-```
-
-Install required packages:
-
-```bash
 sudo apt install -y nginx postgresql postgresql-contrib git curl
-```
-
-Install Node.js 20:
-
-```bash
 curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
 sudo apt install -y nodejs
 ```
@@ -94,23 +90,11 @@ nginx -v
 
 ## 3. Create the Project Folder
 
-Recommended location:
-
 ```bash
 sudo mkdir -p /var/www/bvl
 sudo chown $USER:$USER /var/www/bvl
 cd /var/www/bvl
-```
-
-Clone the project:
-
-```bash
 git clone https://github.com/SeminatorXXL/beekn-vinyl-library.git .
-```
-
-Install dependencies:
-
-```bash
 npm install
 ```
 
@@ -134,7 +118,11 @@ GRANT ALL ON SCHEMA public TO bvl_user;
 
 Then run the BVL schema SQL in the `bvl` database.
 
-If you already created the schema earlier, you can skip that part.
+If you are upgrading an existing BVL database instead of creating a fresh one, also run:
+
+```bash
+psql "$DATABASE_URL" -f sql/002_artist_profile_cache.sql
+```
 
 ## 5. Create the Environment File
 
@@ -147,7 +135,7 @@ nano /var/www/bvl/.env
 Example:
 
 ```env
-PORT=3000
+PORT=3001
 DATABASE_URL=postgresql://bvl_user:CHANGE_THIS_PASSWORD@localhost:5432/bvl
 DISCOGS_TOKEN=YOUR_DISCOGS_TOKEN
 INTERNAL_API_KEY=CHANGE_THIS_TO_A_LONG_SECRET
@@ -162,7 +150,8 @@ Notes:
 * use your real Discogs token
 * choose a strong internal API key
 * include every frontend origin that should be allowed by CORS
-* because Nginx will sit in front of Node, `TRUST_PROXY=true` is correct
+* because Nginx sits in front of Node, `TRUST_PROXY=true` is correct
+* `.env` is loaded automatically by `dotenv`
 
 ## 6. Test BVL Locally on the Server
 
@@ -176,7 +165,7 @@ In another terminal:
 
 ```bash
 curl -H "Authorization: Bearer CHANGE_THIS_TO_A_LONG_SECRET" \
-  "http://127.0.0.1:3000/catalog/search?q=Papercuts"
+  "http://127.0.0.1:3001/catalog/search?q=Papercuts"
 ```
 
 If this works, stop the dev process and continue.
@@ -193,7 +182,7 @@ Start the app:
 
 ```bash
 cd /var/www/bvl
-pm2 start src/server.js --name bvl
+pm2 start npm --name bvl -- start
 ```
 
 Save PM2 config:
@@ -205,7 +194,7 @@ pm2 startup
 
 Run the command PM2 prints on screen so it starts automatically after reboot.
 
-Useful PM2 commands:
+Useful commands:
 
 ```bash
 pm2 status
@@ -216,13 +205,13 @@ pm2 stop bvl
 
 ## 8. Configure Nginx
 
-Create an Nginx site config:
+Create the Nginx site config:
 
 ```bash
 sudo nano /etc/nginx/sites-available/bvl.beekn.nl
 ```
 
-Use this config:
+Use:
 
 ```nginx
 server {
@@ -230,7 +219,7 @@ server {
     server_name bvl.beekn.nl;
 
     location / {
-        proxy_pass http://127.0.0.1:3000;
+        proxy_pass http://127.0.0.1:3001;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -242,7 +231,7 @@ server {
 }
 ```
 
-Enable it:
+Enable and reload:
 
 ```bash
 sudo ln -s /etc/nginx/sites-available/bvl.beekn.nl /etc/nginx/sites-enabled/bvl.beekn.nl
@@ -252,25 +241,13 @@ sudo systemctl reload nginx
 
 ## 9. Enable HTTPS with Let's Encrypt
 
-Install Certbot:
-
 ```bash
 sudo apt install -y certbot python3-certbot-nginx
-```
-
-Request the certificate:
-
-```bash
 sudo certbot --nginx -d bvl.beekn.nl
-```
-
-Follow the prompts and choose the option to redirect HTTP to HTTPS.
-
-Test renewal:
-
-```bash
 sudo certbot renew --dry-run
 ```
+
+Choose the option to redirect HTTP to HTTPS.
 
 ## 10. Open the Firewall
 
@@ -285,14 +262,46 @@ sudo ufw status
 
 ## 11. Verify the Deployment
 
-Check the API in the browser or terminal:
+Basic API check:
 
 ```bash
 curl -i https://bvl.beekn.nl/catalog/search?q=Papercuts \
   -H "Authorization: Bearer CHANGE_THIS_TO_A_LONG_SECRET"
 ```
 
-Check CORS:
+Other endpoint checks:
+
+```bash
+curl -i https://bvl.beekn.nl/catalog/albums/search?q=Papercuts \
+  -H "Authorization: Bearer CHANGE_THIS_TO_A_LONG_SECRET"
+```
+
+```bash
+curl -i https://bvl.beekn.nl/catalog/releases/30348920 \
+  -H "Authorization: Bearer CHANGE_THIS_TO_A_LONG_SECRET"
+```
+
+```bash
+curl -i https://bvl.beekn.nl/catalog/tracks/search?q=Crawling \
+  -H "Authorization: Bearer CHANGE_THIS_TO_A_LONG_SECRET"
+```
+
+```bash
+curl -i https://bvl.beekn.nl/catalog/tracks/1 \
+  -H "Authorization: Bearer CHANGE_THIS_TO_A_LONG_SECRET"
+```
+
+```bash
+curl -i https://bvl.beekn.nl/catalog/artists/search?q=Linkin%20Park \
+  -H "Authorization: Bearer CHANGE_THIS_TO_A_LONG_SECRET"
+```
+
+```bash
+curl -i https://bvl.beekn.nl/catalog/artists/1 \
+  -H "Authorization: Bearer CHANGE_THIS_TO_A_LONG_SECRET"
+```
+
+CORS check:
 
 ```bash
 curl -i https://bvl.beekn.nl/catalog/search?q=Papercuts \
@@ -307,8 +316,6 @@ Access-Control-Allow-Origin: https://beevinyl.app
 ```
 
 ## 12. Updating BVL Later
-
-To deploy updates:
 
 ```bash
 cd /var/www/bvl
@@ -325,7 +332,7 @@ Check the Strato DNS record and wait for propagation.
 
 ### Nginx shows 502 Bad Gateway
 
-Usually this means the Node app is not running.
+Usually the Node app is not running.
 
 Check:
 
@@ -352,7 +359,7 @@ Make sure the frontend domain is listed in:
 ALLOWED_ORIGINS=...
 ```
 
-Then restart BVL:
+Then restart:
 
 ```bash
 pm2 restart bvl
@@ -379,7 +386,7 @@ pm2 restart bvl
 * never commit secrets
 * rotate the Discogs token if it has been shared
 * back up PostgreSQL regularly
-* use `pm2 logs bvl` and Nginx logs for debugging
+* use PM2 and Nginx logs for debugging
 
 Useful logs:
 

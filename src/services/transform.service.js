@@ -34,11 +34,30 @@ function createTransformService() {
   }
 
   function normalizeDuration(duration) {
-    const cleaned = cleanText(duration);
-    return cleaned || null;
+    return cleanText(duration);
   }
 
-  function mapArtist(artist, index) {
+  function normalizeRole(role, fallbackRole) {
+    return cleanText(role) || fallbackRole;
+  }
+
+  function extractArtistSourceId(artist) {
+    if (artist && (Number.isInteger(artist.id) || /^\d+$/.test(String(artist.id || "")))) {
+      return String(artist.id);
+    }
+
+    const resourceUrl = artist && artist.resource_url;
+    if (typeof resourceUrl === "string") {
+      const match = resourceUrl.match(/\/artists\/(\d+)(?:$|[/?#])/);
+      if (match) {
+        return match[1];
+      }
+    }
+
+    return null;
+  }
+
+  function mapArtist(artist, index, fallbackRole = "Primary") {
     const name = normalizeArtistName(artist && (artist.name || artist.anv));
     if (!name) {
       return null;
@@ -47,14 +66,23 @@ function createTransformService() {
     return {
       name,
       sortName: cleanText(artist.sort_name || artist.anv || name) || name,
-      role: cleanText(artist.role) || "Primary",
+      role: normalizeRole(artist && artist.role, fallbackRole),
       sortOrder: index + 1,
+      sourceId: extractArtistSourceId(artist),
     };
   }
 
-  function mapArtists(artists, fallbackArtists = []) {
+  function mapArtists(artists, fallbackArtists = [], fallbackRole = "Primary") {
     const sourceArtists = Array.isArray(artists) && artists.length > 0 ? artists : fallbackArtists;
-    return sourceArtists.map(mapArtist).filter(Boolean);
+    return sourceArtists
+      .map((artist, index) => mapArtist(artist, index, fallbackRole))
+      .filter(Boolean);
+  }
+
+  function mapSupportArtists(extraArtists, offset = 0) {
+    return (Array.isArray(extraArtists) ? extraArtists : [])
+      .map((artist, index) => mapArtist(artist, offset + index, "Support"))
+      .filter(Boolean);
   }
 
   function flattenTracklist(tracklist) {
@@ -71,6 +99,10 @@ function createTransformService() {
             ...subTrack,
             position: subTrack.position || item.position,
             artists: subTrack.artists && subTrack.artists.length > 0 ? subTrack.artists : item.artists,
+            extraartists:
+              subTrack.extraartists && subTrack.extraartists.length > 0
+                ? subTrack.extraartists
+                : item.extraartists,
           });
         }
         continue;
@@ -120,23 +152,73 @@ function createTransformService() {
       .join("|");
   }
 
-  function mapRelease(release) {
-    const releaseArtists = mapArtists(release.artists);
-    const coverUrl =
-      release.images && release.images.length > 0
-        ? release.images.find((image) => image.type === "primary")?.uri150 ||
-          release.images[0].uri150 ||
-          release.images[0].uri ||
-          null
-        : release.thumb || null;
+  function extractCoverUrlFromImages(images, fallbackThumb) {
+    if (Array.isArray(images) && images.length > 0) {
+      const firstImage = images[0];
+      return cleanText(firstImage.uri) || cleanText(firstImage.uri150) || null;
+    }
 
-    const tracks = flattenTracklist(release.tracklist).map((track, index) => ({
-      position: cleanText(track.position) || String(index + 1),
-      trackNumber: extractTrackNumber(track.position, index),
-      title: cleanText(track.title),
-      duration: normalizeDuration(track.duration),
-      artists: mapArtists(track.artists, release.artists),
-    })).filter((track) => track.title);
+    return cleanText(fallbackThumb);
+  }
+
+  function extractFormats(release) {
+    return (Array.isArray(release && release.formats) ? release.formats : [])
+      .map((format) => ({
+        name: cleanText(format && format.name),
+        qty: cleanText(format && format.qty),
+        descriptions: Array.isArray(format && format.descriptions)
+          ? format.descriptions.map((description) => cleanText(description)).filter(Boolean)
+          : [],
+      }))
+      .filter((format) => format.name);
+  }
+
+  function isVinylRelease(release) {
+    return extractFormats(release).some(
+      (format) => String(format.name).toLowerCase() === "vinyl"
+    );
+  }
+
+  function mapArtistProfile(artistProfile) {
+    return {
+      imageUrl:
+        (Array.isArray(artistProfile && artistProfile.images) &&
+          artistProfile.images[0] &&
+          cleanText(artistProfile.images[0].uri)) ||
+        null,
+      realName: cleanText(artistProfile && artistProfile.realname),
+      socials: Array.isArray(artistProfile && artistProfile.urls)
+        ? artistProfile.urls.map((url) => cleanText(url)).filter(Boolean)
+        : [],
+      rawJson: artistProfile || null,
+    };
+  }
+
+  function mapRelease(release) {
+    const mainArtists = mapArtists(release.artists);
+    const supportArtists = mapSupportArtists(release.extraartists, mainArtists.length);
+    const coverUrl = extractCoverUrlFromImages(release.images, release.thumb);
+    const formats = extractFormats(release);
+
+    const tracks = flattenTracklist(release.tracklist)
+      .map((track, index) => {
+        const trackMainArtists = mapArtists(track.artists, release.artists);
+        const trackSupportArtists = mapSupportArtists(
+          track.extraartists,
+          trackMainArtists.length
+        );
+
+        return {
+          position: cleanText(track.position) || String(index + 1),
+          trackNumber: extractTrackNumber(track.position, index),
+          title: cleanText(track.title),
+          duration: normalizeDuration(track.duration),
+          artists: [...trackMainArtists, ...trackSupportArtists],
+          mainArtists: trackMainArtists,
+          supportArtists: trackSupportArtists,
+        };
+      })
+      .filter((track) => track.title);
 
     const title = cleanText(release.title);
 
@@ -149,6 +231,8 @@ function createTransformService() {
         title,
         year: parseYear(release.year),
         coverUrl,
+        isVinyl: isVinylRelease(release),
+        formats,
       },
       source: {
         source: "discogs",
@@ -156,9 +240,18 @@ function createTransformService() {
         sourceUrl: cleanText(release.uri) || `https://www.discogs.com/release/${release.id}`,
         rawJson: release,
       },
-      artists: releaseArtists,
+      artists: [...mainArtists, ...supportArtists],
+      mainArtists,
+      supportArtists,
       genres: Array.from(
-        new Set([...(Array.isArray(release.genres) ? release.genres : []), ...(Array.isArray(release.styles) ? release.styles : [])].map((genre) => cleanText(genre)).filter(Boolean))
+        new Set(
+          [
+            ...(Array.isArray(release.genres) ? release.genres : []),
+            ...(Array.isArray(release.styles) ? release.styles : []),
+          ]
+            .map((genre) => cleanText(genre))
+            .filter(Boolean)
+        )
       ),
       tracks,
     };
@@ -205,6 +298,8 @@ function createTransformService() {
   return {
     mapRelease,
     mapSearchResults,
+    isVinylRelease,
+    mapArtistProfile,
   };
 }
 
