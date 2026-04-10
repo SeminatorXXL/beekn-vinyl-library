@@ -18,7 +18,6 @@ Recommended local development setup:
 ### Album overview
 
 ```http
-GET /catalog/search?q=Papercuts
 GET /catalog/albums/search?q=Papercuts
 ```
 
@@ -35,7 +34,7 @@ Album overviews are always returned from PostgreSQL. If Discogs fallback is need
 ### Album detail
 
 ```http
-GET /catalog/releases/30348920
+GET /catalog/albums/1
 ```
 
 Returns:
@@ -109,19 +108,13 @@ If artist profile fields are missing locally, BVL fetches them once, stores them
 ```powershell
 Invoke-RestMethod `
   -Headers @{ Authorization = "Bearer YOUR_INTERNAL_API_KEY" } `
-  -Uri "http://localhost:3001/catalog/search?q=Papercuts"
-```
-
-```powershell
-Invoke-RestMethod `
-  -Headers @{ Authorization = "Bearer YOUR_INTERNAL_API_KEY" } `
   -Uri "http://localhost:3001/catalog/albums/search?q=Papercuts"
 ```
 
 ```powershell
 Invoke-RestMethod `
   -Headers @{ Authorization = "Bearer YOUR_INTERNAL_API_KEY" } `
-  -Uri "http://localhost:3001/catalog/releases/30348920"
+  -Uri "http://localhost:3001/catalog/albums/1"
 ```
 
 ```powershell

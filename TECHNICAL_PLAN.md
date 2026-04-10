@@ -27,9 +27,8 @@ The API supports these read scenarios:
 ## API Endpoints
 
 ```http
-GET /catalog/search?q=
 GET /catalog/albums/search?q=
-GET /catalog/releases/:id
+GET /catalog/albums/:id
 GET /catalog/tracks/search?q=
 GET /catalog/tracks/:id
 GET /catalog/artists/search?q=
@@ -38,8 +37,8 @@ GET /catalog/artists/:id
 
 Meaning:
 
-* `/catalog/search` and `/catalog/albums/search` return album overview results
-* `/catalog/releases/:id` returns album detail by Discogs release id
+* `/catalog/albums/search` returns album overview results
+* `/catalog/albums/:id` returns album detail by internal album id
 * `/catalog/tracks/search` returns track overview results
 * `/catalog/tracks/:id` returns track detail by internal track id
 * `/catalog/artists/search` returns artist overview results

@@ -165,7 +165,7 @@ In another terminal:
 
 ```bash
 curl -H "Authorization: Bearer CHANGE_THIS_TO_A_LONG_SECRET" \
-  "http://127.0.0.1:3001/catalog/search?q=Papercuts"
+  "http://127.0.0.1:3001/catalog/albums/search?q=Papercuts"
 ```
 
 If this works, stop the dev process and continue.
@@ -265,19 +265,12 @@ sudo ufw status
 Basic API check:
 
 ```bash
-curl -i https://bvl.beekn.nl/catalog/search?q=Papercuts \
-  -H "Authorization: Bearer CHANGE_THIS_TO_A_LONG_SECRET"
-```
-
-Other endpoint checks:
-
-```bash
 curl -i https://bvl.beekn.nl/catalog/albums/search?q=Papercuts \
   -H "Authorization: Bearer CHANGE_THIS_TO_A_LONG_SECRET"
 ```
 
 ```bash
-curl -i https://bvl.beekn.nl/catalog/releases/30348920 \
+curl -i https://bvl.beekn.nl/catalog/albums/1 \
   -H "Authorization: Bearer CHANGE_THIS_TO_A_LONG_SECRET"
 ```
 
@@ -304,7 +297,7 @@ curl -i https://bvl.beekn.nl/catalog/artists/1 \
 CORS check:
 
 ```bash
-curl -i https://bvl.beekn.nl/catalog/search?q=Papercuts \
+curl -i https://bvl.beekn.nl/catalog/albums/search?q=Papercuts \
   -H "Origin: https://beevinyl.app" \
   -H "Authorization: Bearer CHANGE_THIS_TO_A_LONG_SECRET"
 ```
@@ -312,7 +305,7 @@ curl -i https://bvl.beekn.nl/catalog/search?q=Papercuts \
 You should see:
 
 ```text
-Access-Control-Allow-Origin: https://beevinyl.app
+Access-Control-Allow-Origin: https://www.beevinyl.app
 ```
 
 ## 12. Updating BVL Later

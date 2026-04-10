@@ -15,16 +15,16 @@ const searchQuerySchema = z.object({
 });
 
 function createCatalogController({ catalogService }) {
-  async function getReleaseById(req, res, next) {
+  async function getAlbumById(req, res, next) {
     try {
       const parsedParams = entityIdSchema.safeParse(req.params);
 
       if (!parsedParams.success) {
-        throw new BadRequestError("Invalid release id");
+        throw new BadRequestError("Invalid album id");
       }
 
-      const release = await catalogService.getAlbumDetailByReleaseId(parsedParams.data.id);
-      res.status(200).json({ data: release });
+      const album = await catalogService.getAlbumDetailById(parsedParams.data.id);
+      res.status(200).json({ data: album });
     } catch (error) {
       next(error);
     }
@@ -124,7 +124,7 @@ function createCatalogController({ catalogService }) {
   }
 
   return {
-    getReleaseById,
+    getAlbumById,
     searchAlbums,
     searchTracks,
     getTrackById,

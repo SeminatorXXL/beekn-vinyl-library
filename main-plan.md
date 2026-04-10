@@ -1,476 +1,214 @@
-# BeeVinyl (BV) – Complete Technical Project Plan
+# BeeVinyl Main Plan
 
-## 1. Doel van de applicatie
+## 1. Doel
 
-BeeVinyl (BV) is een webapplicatie voor vinyl-liefhebbers waarin gebruikers:
+BeeVinyl is een vinyl-platform waarin gebruikers:
 
-- vinyl releases kunnen ontdekken via de Beekn Vinyl Library (BVL)
-- hun eigen collectie, wishlist en favorieten beheren
-- kunnen zoeken op album- en trackniveau
-- sociale interactie hebben met vrienden
-- hun collectie veilig kunnen delen
+* vinylalbums kunnen ontdekken
+* album-, track- en artiestinformatie kunnen bekijken
+* hun collectie, wishlist en favorieten kunnen beheren
+* later sociale functies kunnen gebruiken
 
----
+De cataloguslaag hiervoor is Beekn Vinyl Library (BVL).
 
-## 2. Architectuur
+## 2. Wat BVL doet
 
-### Overzicht
+BVL is een vinyl-only catalog API.
+
+BVL:
+
+* bewaart genormaliseerde catalogusdata in PostgreSQL
+* gebruikt Discogs alleen als fallbackbron
+* slaat opgehaalde data lokaal op
+* levert daarna dezelfde data uit de eigen database terug
+
+Kort:
+
+* fetch once
+* store locally
+* serve fast
+
+## 3. Wat BVL teruggeeft
+
+BVL ondersteunt 6 read scenario's:
+
+* Album overview: cover, albumnaam, main artist
+* Album detail: albuminfo, formats, tracks, support artists
+* Track overview: cover van vroegste album-entry, tracknaam, artiesten
+* Track detail: tracknaam, artiesten, album appearances, positie per album
+* Artist overview: afbeelding, naam
+* Artist detail: afbeelding, naam, real name, genres, socials, main albums, featured albums
+
+Actieve endpoints:
+
+```http
+GET /catalog/albums/search?q=
+GET /catalog/albums/:id
+GET /catalog/tracks/search?q=
+GET /catalog/tracks/:id
+GET /catalog/artists/search?q=
+GET /catalog/artists/:id
+```
+
+Belangrijk:
+
+* `/catalog/albums/search` is album overview
+* `/catalog/albums/:id` is album detail op intern album id
+* `/catalog/tracks/:id` gebruikt intern track id
+* `/catalog/artists/:id` gebruikt intern artist id
+
+## 4. Architectuur
 
 Het systeem bestaat uit drie lagen:
 
-1. Beekn Vinyl Library (BVL) – Catalogus Service (extern)
-2. BeeVinyl Backend (BV Backend)
-3. BeeVinyl Frontend (BV Frontend)
+1. BVL
+2. BeeVinyl Backend
+3. BeeVinyl Frontend
 
----
-
-### 2.1 Beekn Vinyl Library (BVL)
-
-De centrale catalogusdatabase.
-
-Bevat:
-- alle vinyl releases
-- artiesten
-- tracks
-- relaties tussen deze entiteiten
-
-Functie:
-- bron van waarheid (source of truth)
-- levert data via API
-
-Belangrijk:
-- wordt NIET direct door de frontend aangesproken
-
----
-
-### 2.2 BeeVinyl Backend (BV Backend)
+### 4.1 BVL
 
 Verantwoordelijk voor:
 
-- authenticatie
-- gebruikersbeheer
-- collectie / wishlist / favorieten
-- vrienden / social
-- feed (later)
-- orders
-- caching van catalogusdata
-- privacy en sharing
+* vinyl catalogusdata
+* Discogs fallback
+* normalisatie van albums, artists, tracks en genres
+* snelle read API voor catalogusdata
 
-Belangrijk:
-- frontend praat alleen met deze backend
-- backend bepaalt wanneer BVL wordt aangeroepen
+BVL is de catalogus source of truth.
 
----
-
-### 2.3 BeeVinyl Frontend (BV Frontend)
+### 4.2 BeeVinyl Backend
 
-- React applicatie
-- UI + state management
-- communiceert alleen met BV Backend
+Verantwoordelijk voor:
 
----
-
-## 3. Data Flow
+* authenticatie
+* gebruikersbeheer
+* collectie
+* wishlist
+* favorieten
+* privacy en sharing
+* social features later
 
-### Zoekflow
+De BeeVinyl backend praat met BVL.
 
-Frontend → BV Backend  
-→ Cache check  
-→ (miss) → BVL API  
-→ Cache opslaan  
-→ Response
+### 4.3 BeeVinyl Frontend
 
----
+Verantwoordelijk voor:
 
-### Detailflow
+* UI
+* state management
+* tonen van catalogusdata
+* tonen van gebruikersdata
 
-Frontend → BV Backend  
-→ Release cache check  
-→ (miss/stale) → BVL API  
-→ Cache update  
-→ Response
-
----
+De frontend praat niet direct met BVL.
 
-## 4. Database Design
-
-## 4.1 Beekn Vinyl Library (BVL Database)
-
-### artists
-- id
-- name
-- sort_name
-- created_at
-
----
-
-### releases
-- id
-- title
-- main_artist_id
-- year
-- genre
-- cover_url
-- updated_at
-
----
-
-### release_artists
-- id
-- release_id
-- artist_id
-- role (main, featured, etc.)
-- sort_order
-
----
+## 5. Hoe het werkt
 
-### tracks
-- id
-- release_id
-- track_number
-- title
-- duration
+### Album overview flow
 
----
+1. Frontend vraagt albums op via BeeVinyl Backend
+2. BeeVinyl Backend vraagt BVL
+3. BVL zoekt eerst lokaal in PostgreSQL
+4. Als er te weinig lokale resultaten zijn, gebruikt BVL Discogs fallback
+5. BVL transformeert en bewaart de data
+6. BVL geeft de opgeslagen data terug
+7. BeeVinyl Backend geeft de response terug aan de frontend
 
-### track_artists
-- id
-- track_id
-- artist_id
-- role (main, featured, remix)
-- sort_order
+### Album detail flow
 
----
+1. Frontend vraagt albumdetail op
+2. BeeVinyl Backend vraagt BVL met intern album id
+3. BVL controleert PostgreSQL
+4. Als het album ontbreekt, haalt BVL het op uit Discogs
+5. BVL slaat het album, artists, tracks en genres op
+6. BVL retourneert de opgeslagen detailresponse
 
-## 4.2 BeeVinyl App Database (BV Database)
+### Track en artist flow
 
-### users
-- id
-- username
-- name
-- email
-- phone (nullable)
-- password_hash
-- created_at
+1. Frontend vraagt BeeVinyl Backend
+2. BeeVinyl Backend vraagt BVL
+3. BVL bouwt track- en artist-readmodels uit opgeslagen vinyldata
+4. Als artist-profieldata ontbreekt, haalt BVL die eenmalig op uit Discogs
+5. BVL slaat die artist-profieldata lokaal op
+6. Volgende requests komen uit PostgreSQL
 
----
+## 6. Database model van BVL
 
-### user_collection_items
-- id
-- user_id
-- release_id (ref → BVL)
-- added_at
-- condition
-- notes
+Belangrijkste tabellen:
 
----
+* `albums`
+* `album_sources`
+* `artists`
+* `album_artists`
+* `tracks`
+* `track_artists`
+* `genres`
+* `album_genres`
 
-### user_wishlist_items
-- id
-- user_id
-- release_id (ref → BVL)
-- added_at
+Extra artist cachevelden op `artists`:
 
----
+* `discogs_source_id`
+* `image_url`
+* `real_name`
+* `socials`
+* `profile_raw_json`
+* `profile_updated_at`
 
-### user_favorite_items
-- id
-- user_id
-- release_id (ref → BVL)
-- added_at
+Belangrijke regel:
 
----
+* BVL retourneert nooit raw Discogs JSON naar de API-consumer
 
-### friendships
-- id
-- requester_id
-- addressee_id
-- status (pending, accepted)
-- created_at
+## 7. Dataregels
 
----
+BVL werkt met deze regels:
 
-### activity_feed_events (fase 2)
-- id
-- actor_user_id
-- event_type
-- release_id
-- created_at
+* alleen vinyl releases zijn in scope
+* SQL staat in repositories, niet in controllers
+* alle queries zijn parameterized
+* `album_sources (source, source_id)` voorkomt dubbele bronrecords
+* album identity voorkomt dubbele albums bij herhaalde Discogs search hits
+* artist-profielen worden lokaal gecachet na eerste succesvolle fetch
 
----
+## 8. BeeVinyl Backend rol
 
-### orders
-- id
-- user_id
-- release_id
-- status (planned, ordered, shipped, delivered)
-- ordered_at
-- delivered_at
+De BeeVinyl backend gebruikt BVL als cataloguslaag en beheert zelf:
 
----
+* users
+* collectie
+* wishlist
+* favorieten
+* delen van lijsten
+* toekomstige sociale logica
 
-### share_tokens
-- id
-- user_id
-- type (collection, wishlist)
-- token
-- visibility
-- expires_at
+De BeeVinyl backend is de enige laag die de frontend aanspreekt.
 
----
+## 9. Frontend regels
 
-## 5. Multi-Artist Support
+De frontend:
 
-Het systeem ondersteunt:
+* gebruikt de BeeVinyl backend API
+* praat niet direct met BVL
+* toont Discogs-attributie waar nodig
+* gebruikt overview endpoints voor lijsten
+* gebruikt detail endpoints voor detailpagina's
 
-- meerdere artiesten per track
-- meerdere artiesten per release
+## 10. Security
 
-Door gebruik van:
+Belangrijke regels:
 
-- track_artists
-- release_artists
+* BVL gebruikt een interne API key
+* CORS werkt met een allowlist
+* rate limiting beschermt de API
+* secrets staan alleen in `.env`
+* Discogs token wordt nooit gelogd
+* interne fouten worden niet rauw naar buiten gestuurd
 
----
+## 11. Lokale setup
 
-## 6. Cache Strategie
+Aanbevolen lokaal:
 
-### Doel
-- snellere zoekresultaten
-- minder load op BVL API
+* BeeVinyl frontend op `http://localhost:3000`
+* BVL op `http://localhost:3001`
 
----
+## 12. Kernzin
 
-### Search Cache
-search_cache
-- query
-- result_json
-- created_at
-- expires_at
-
----
-
-### Release Cache
-release_cache
-- release_id
-- payload_json
-- cached_at
-- last_accessed_at
-- expires_at
-
----
-
-### Cache regels
-
-Cache wanneer:
-- recent bekeken
-- vaak gezocht
-- in collectie/wishlist zit
-
----
-
-### TTL (voorbeeld)
-
-- search: 24 uur  
-- release: 7 dagen  
-- populair: 14 dagen  
-
----
-
-## 7. API Structuur
-
-### 7.1 BVL API
-
-GET /catalog/search/releases  
-GET /catalog/releases/:id  
-GET /catalog/search/tracks  
-
----
-
-### 7.2 BV Backend API
-
-GET /api/search/releases  
-GET /api/search/tracks  
-GET /api/releases/:id  
-
-POST /api/me/collection  
-POST /api/me/wishlist  
-POST /api/me/favorites  
-
-GET /api/me/collection  
-GET /api/me/wishlist  
-
----
-
-## 8. Privacy & Sharing
-
-### Visibility levels
-
-- private
-- friends
-- link
-- public
-
----
-
-### Share links
-
-/shared/collection/{token}  
-/shared/wishlist/{token}  
-
----
-
-## 9. Zoekfunctionaliteit
-
-### Globaal
-- alle releases uit BVL
-- tracks
-- artiesten
-- multi-artist support
-
----
-
-### Persoonlijk
-- zoeken in eigen collectie
-- “heb ik dit nummer?”
-- “op welke plaat staat dit nummer?”
-
----
-
-### Social
-- vrienden collecties
-- wishlist van anderen
-
----
-
-## 10. Pagina Structuur
-
-### Publiek
-- home
-- search
-- release detail
-- login
-- register
-
----
-
-### Ingelogd
-- dashboard
-- collectie
-- wishlist
-- favorieten
-- profiel
-- vrienden
-- instellingen
-
----
-
-### Shared
-- gedeelde collectie
-- gedeelde wishlist
-
----
-
-## 11. Tech Stack
-
-### Frontend
-- React (Vite)
-- React Router
-- TanStack Query
-- React Hook Form
-
----
-
-### Backend
-- Node.js
-- Express
-- TypeScript
-- Prisma ORM
-
----
-
-### Database
-- PostgreSQL
-
----
-
-### Cache
-- PostgreSQL (initieel)
-- Redis (later)
-
----
-
-### Storage
-- S3-compatible storage (images)
-
----
-
-## 12. Bouwvolgorde
-
-### Fase 1 (MVP)
-- auth systeem
-- catalogus search via BVL
-- release detail
-- collectie
-- wishlist
-- favorieten
-- profiel
-- privacy instellingen
-- share links
-
----
-
-### Fase 2
-- vrienden systeem
-- feed
-- orders
-
----
-
-### Fase 3
-- aanbevelingen
-- notificaties
-- barcode scanning
-- externe integraties
-
----
-
-## 13. Belangrijke ontwerpregels
-
-### Niet doen
-- arrays in user tabel opslaan
-- meerdere artiesten als tekst opslaan
-- frontend direct laten praten met BVL
-- alles in één bestand bouwen
-
----
-
-### Wel doen
-- relationele database
-- junction tables
-- cache laag
-- backend als centrale controlelaag
-- duidelijke service scheiding (BVL vs BV)
-
----
-
-## 14. Samenvatting
-
-BeeVinyl bestaat uit:
-
-- BVL: centrale vinyl catalogus (source of truth)
-- BV Backend: logica + users + cache
-- BV Frontend: UI
-
-De backend:
-
-- checkt cache
-- haalt data uit BVL indien nodig
-- slaat slim lokaal op
-- beheert alle gebruikersfunctionaliteit
-
----
-
-## 15. Kernzin
-
-BeeVinyl gebruikt een backend als centrale laag die gebruikersdata beheert, caching toepast en alleen bij cache-miss data ophaalt uit de Beekn Vinyl Library (BVL).
+BeeVinyl gebruikt BVL als vinyl-only cataloguslaag: BVL haalt alleen ontbrekende catalogusdata op uit Discogs, slaat die lokaal op in PostgreSQL en serveert daarna snelle, genormaliseerde API-responses vanuit de eigen database.

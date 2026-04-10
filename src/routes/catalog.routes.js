@@ -8,9 +8,8 @@ function createCatalogRouter(dependencies) {
 
   router.use(requireApiKey);
 
-  router.get("/search", controller.searchAlbums);
   router.get("/albums/search", controller.searchAlbums);
-  router.get("/releases/:id", controller.getReleaseById);
+  router.get("/albums/:id", controller.getAlbumById);
 
   router.get("/tracks/search", controller.searchTracks);
   router.get("/tracks/:id", controller.getTrackById);

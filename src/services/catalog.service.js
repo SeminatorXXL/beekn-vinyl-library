@@ -214,25 +214,14 @@ function createCatalogService({
     return storedProfile;
   }
 
-  async function getAlbumDetailByReleaseId(releaseId) {
-    let release = await catalogRepository.findReleaseBySourceId("discogs", String(releaseId));
+  async function getAlbumDetailById(albumId) {
+    const album = await catalogRepository.getReleaseByAlbumId(albumId);
 
-    if (!release) {
-      const discogsRelease = await discogsService.fetchRelease(releaseId);
-      const mappedRelease = transformService.mapRelease(discogsRelease);
-
-      if (!mappedRelease.album.isVinyl) {
-        throw new NotFoundError("Release not found");
-      }
-
-      release = await ingestService.saveRelease(mappedRelease);
+    if (!album || album.isVinyl === false) {
+      throw new NotFoundError("Album not found");
     }
 
-    if (!release || release.isVinyl === false) {
-      throw new NotFoundError("Release not found");
-    }
-
-    return toAlbumDetail(release);
+    return toAlbumDetail(album);
   }
 
   async function searchAlbums(query) {
@@ -343,7 +332,7 @@ function createCatalogService({
   }
 
   return {
-    getAlbumDetailByReleaseId,
+    getAlbumDetailById,
     searchAlbums,
     searchTracks,
     getTrackDetail,

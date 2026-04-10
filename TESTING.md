@@ -28,7 +28,7 @@ RESTART IDENTITY CASCADE;
 ```powershell
 Invoke-RestMethod `
   -Headers @{ Authorization = "Bearer my-secret-key" } `
-  -Uri "http://localhost:3001/catalog/search?q=Papercuts" |
+  -Uri "http://localhost:3001/catalog/albums/search?q=Papercuts" |
 ConvertTo-Json -Depth 10
 ```
 
@@ -37,7 +37,7 @@ ConvertTo-Json -Depth 10
 ```powershell
 Invoke-RestMethod `
   -Headers @{ Authorization = "Bearer my-secret-key" } `
-  -Uri "http://localhost:3001/catalog/releases/30348920" |
+  -Uri "http://localhost:3001/catalog/albums/1" |
 ConvertTo-Json -Depth 10
 ```
 

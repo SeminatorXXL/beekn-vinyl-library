@@ -20,9 +20,8 @@ Fetch once, store locally, serve fast.
 ## API
 
 ```http
-GET /catalog/search?q=
 GET /catalog/albums/search?q=
-GET /catalog/releases/:id
+GET /catalog/albums/:id
 GET /catalog/tracks/search?q=
 GET /catalog/tracks/:id
 GET /catalog/artists/search?q=
@@ -52,7 +51,7 @@ The frontend reads one of these scenarios:
 
 * Vinyl-only release ingest
 * Album overview search with Discogs fallback
-* Album detail by Discogs release id
+* Album detail by internal album id
 * Track overview and detail from stored vinyl data
 * Artist overview and detail from stored vinyl data with persisted Discogs artist caching
 * `.env` support via `dotenv`
@@ -109,7 +108,6 @@ psql "$DATABASE_URL" -f sql/002_artist_profile_cache.sql
 ### Album overview
 
 ```http
-GET /catalog/search?q=Papercuts
 GET /catalog/albums/search?q=Papercuts
 ```
 
@@ -122,10 +120,10 @@ Returns compact album cards:
 ### Album detail
 
 ```http
-GET /catalog/releases/30348920
+GET /catalog/albums/1
 ```
 
-Uses the Discogs release id and returns:
+Uses the internal album id from album search results and returns:
 
 * album info
 * vinyl formats
