@@ -1,0 +1,56 @@
+const express = require("express");
+const cors = require("cors");
+const helmet = require("helmet");
+const db = require("./db");
+const { createCatalogRepository } = require("./repositories/catalog.repository");
+const { createDiscogsService } = require("./services/discogs.service");
+const { createTransformService } = require("./services/transform.service");
+const { createIngestService } = require("./services/ingest.service");
+const { createSearchService } = require("./services/search.service");
+const { createCatalogRouter } = require("./routes/catalog.routes");
+const { errorHandler, notFoundHandler } = require("./middleware/error.middleware");
+
+function createApp() {
+  const app = express();
+  const catalogRepository = createCatalogRepository(db);
+  const discogsService = createDiscogsService();
+  const transformService = createTransformService();
+  const ingestService = createIngestService({
+    db,
+    catalogRepository,
+  });
+  const searchService = createSearchService({
+    catalogRepository,
+    discogsService,
+    transformService,
+    ingestService,
+  });
+
+  app.use(
+    cors({
+      origin: process.env.ALLOWED_ORIGIN,
+    })
+  );
+  app.use(helmet());
+  app.use(express.json());
+
+  app.use(
+    "/catalog",
+    createCatalogRouter({
+      catalogRepository,
+      discogsService,
+      transformService,
+      ingestService,
+      searchService,
+    })
+  );
+
+  app.use(notFoundHandler);
+  app.use(errorHandler);
+
+  return app;
+}
+
+module.exports = {
+  createApp,
+};
