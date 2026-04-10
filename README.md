@@ -57,12 +57,55 @@ DATABASE_URL=postgresql://user:password@localhost:5432/bvl
 DISCOGS_TOKEN=your_token
 INTERNAL_API_KEY=your_internal_key
 ALLOWED_ORIGIN=http://localhost:5173
+ALLOWED_ORIGINS=http://localhost:5173,http://localhost:3001
+API_RATE_LIMIT_WINDOW_MS=1000
+API_RATE_LIMIT_MAX_REQUESTS=10
+TRUST_PROXY=false
 ```
 
 ## Run
 
 ```bash
 npm run dev
+```
+
+## Security Controls
+
+### CORS allowlist
+
+BVL uses a dedicated CORS middleware file and only allows configured origins.
+
+Use either:
+
+* `ALLOWED_ORIGIN` for a single frontend
+* `ALLOWED_ORIGINS` for a comma-separated allowlist
+
+Example:
+
+```env
+ALLOWED_ORIGINS=http://localhost:5173,https://app.example.com
+```
+
+Requests without an `Origin` header, like server-to-server calls or local API tools, are still allowed.
+
+### API rate limiting
+
+BVL includes a per-IP request limiter.
+
+Environment variables:
+
+```env
+API_RATE_LIMIT_WINDOW_MS=1000
+API_RATE_LIMIT_MAX_REQUESTS=10
+TRUST_PROXY=false
+```
+
+That example means a single IP can make up to 10 requests per 1 second window.
+
+If BVL is running behind a reverse proxy, set:
+
+```env
+TRUST_PROXY=true
 ```
 
 ## Search

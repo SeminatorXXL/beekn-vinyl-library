@@ -12,6 +12,18 @@ function createIngestService({ db, catalogRepository }) {
           return existingRelease;
         }
 
+        const identityMatch = await catalogRepository.findReleaseByAlbumIdentity(
+          mappedRelease.album.title,
+          mappedRelease.artists,
+          mappedRelease.album.year,
+          client
+        );
+
+        if (identityMatch) {
+          await catalogRepository.insertAlbumSource(identityMatch.id, mappedRelease.source, client);
+          return catalogRepository.getReleaseByAlbumId(identityMatch.id, client);
+        }
+
         const albumId = await catalogRepository.insertAlbum(mappedRelease.album, client);
         await catalogRepository.insertAlbumSource(albumId, mappedRelease.source, client);
 

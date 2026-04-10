@@ -91,6 +91,35 @@ function createTransformService() {
     return match ? match[1] : null;
   }
 
+  function parseSearchResultTitle(value) {
+    const cleaned = cleanText(value);
+    if (!cleaned) {
+      return {
+        artistName: null,
+        releaseTitle: null,
+      };
+    }
+
+    const separatorIndex = cleaned.indexOf(" - ");
+    if (separatorIndex === -1) {
+      return {
+        artistName: null,
+        releaseTitle: cleaned,
+      };
+    }
+
+    return {
+      artistName: cleanText(cleaned.slice(0, separatorIndex)),
+      releaseTitle: cleanText(cleaned.slice(separatorIndex + 3)),
+    };
+  }
+
+  function createSearchCandidateKey(candidate) {
+    return [candidate.artistName || "", candidate.title || "", candidate.year || ""]
+      .map((part) => String(part).trim().toLowerCase())
+      .join("|");
+  }
+
   function mapRelease(release) {
     const releaseArtists = mapArtists(release.artists);
     const coverUrl =
@@ -146,10 +175,13 @@ function createTransformService() {
       return null;
     }
 
+    const parsedTitle = parseSearchResultTitle(result.title);
+
     return {
       source: "discogs",
       sourceId,
-      title: cleanText(result.title),
+      artistName: parsedTitle.artistName,
+      title: parsedTitle.releaseTitle,
       year: parseYear(result.year),
       coverUrl: cleanText(result.thumb),
       sourceUrl: cleanText(result.uri) || `https://www.discogs.com/release/${sourceId}`,
@@ -157,7 +189,17 @@ function createTransformService() {
   }
 
   function mapSearchResults(results) {
-    return (Array.isArray(results) ? results : []).map(mapSearchResult).filter(Boolean);
+    const mappedResults = (Array.isArray(results) ? results : []).map(mapSearchResult).filter(Boolean);
+    const uniqueCandidates = new Map();
+
+    for (const candidate of mappedResults) {
+      const candidateKey = createSearchCandidateKey(candidate);
+      if (!uniqueCandidates.has(candidateKey)) {
+        uniqueCandidates.set(candidateKey, candidate);
+      }
+    }
+
+    return Array.from(uniqueCandidates.values());
   }
 
   return {

@@ -1,5 +1,4 @@
 const express = require("express");
-const cors = require("cors");
 const helmet = require("helmet");
 const db = require("./db");
 const { createCatalogRepository } = require("./repositories/catalog.repository");
@@ -8,10 +7,14 @@ const { createTransformService } = require("./services/transform.service");
 const { createIngestService } = require("./services/ingest.service");
 const { createSearchService } = require("./services/search.service");
 const { createCatalogRouter } = require("./routes/catalog.routes");
+const { createCorsMiddleware } = require("./middleware/cors.middleware");
+const { createRateLimitMiddleware } = require("./middleware/rate-limit.middleware");
 const { errorHandler, notFoundHandler } = require("./middleware/error.middleware");
 
 function createApp() {
   const app = express();
+  app.set("trust proxy", process.env.TRUST_PROXY === "true");
+
   const catalogRepository = createCatalogRepository(db);
   const discogsService = createDiscogsService();
   const transformService = createTransformService();
@@ -26,12 +29,9 @@ function createApp() {
     ingestService,
   });
 
-  app.use(
-    cors({
-      origin: process.env.ALLOWED_ORIGIN,
-    })
-  );
+  app.use(createCorsMiddleware());
   app.use(helmet());
+  app.use(createRateLimitMiddleware());
   app.use(express.json());
 
   app.use(

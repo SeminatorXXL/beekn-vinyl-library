@@ -7,6 +7,13 @@ function createCatalogRepository(db) {
     return value.replace(/[\\%_]/g, "\\$&");
   }
 
+  function normalizeIdentityValue(value) {
+    return String(value || "")
+      .trim()
+      .replace(/\s+/g, " ")
+      .toLowerCase();
+  }
+
   async function findReleaseBySourceId(source, sourceId, client) {
     const executor = getExecutor(client);
     const result = await executor.query(
@@ -54,6 +61,7 @@ function createCatalogRepository(db) {
           ON s.album_id = a.id
          AND s.source = $2
         WHERE a.id = $1
+        ORDER BY s.id ASC NULLS LAST
         LIMIT 1
       `,
       [albumId, "discogs"]
@@ -358,6 +366,51 @@ function createCatalogRepository(db) {
     return releases;
   }
 
+  async function findReleaseByAlbumIdentity(title, artists, year, client) {
+    const executor = getExecutor(client);
+    const normalizedTitle = normalizeIdentityValue(title);
+    const normalizedArtistNames = (Array.isArray(artists) ? artists : [])
+      .map((artist) => normalizeIdentityValue(artist.name))
+      .filter(Boolean);
+
+    if (!normalizedTitle || normalizedArtistNames.length === 0) {
+      return null;
+    }
+
+    const result = await executor.query(
+      `
+        SELECT DISTINCT a.id
+        FROM albums a
+        INNER JOIN album_artists aa ON aa.album_id = a.id
+        INNER JOIN artists ar ON ar.id = aa.artist_id
+        WHERE LOWER(TRIM(a.title)) = $1
+          AND ($2::int IS NULL OR a.year = $2 OR a.year IS NULL)
+        ORDER BY a.id ASC
+      `,
+      [normalizedTitle, year || null]
+    );
+
+    for (const row of result.rows) {
+      const release = await getReleaseByAlbumId(row.id, client);
+      if (!release) {
+        continue;
+      }
+
+      const releaseArtistNames = release.artists
+        .map((artist) => normalizeIdentityValue(artist.name))
+        .filter(Boolean);
+
+      if (
+        releaseArtistNames.length === normalizedArtistNames.length &&
+        releaseArtistNames.every((artistName, index) => artistName === normalizedArtistNames[index])
+      ) {
+        return release;
+      }
+    }
+
+    return null;
+  }
+
   return {
     findReleaseBySourceId,
     getReleaseByAlbumId,
@@ -372,6 +425,7 @@ function createCatalogRepository(db) {
     insertGenre,
     linkAlbumGenre,
     searchLocalReleases,
+    findReleaseByAlbumIdentity,
   };
 }
 
