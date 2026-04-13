@@ -10,8 +10,13 @@ function createCatalogRepository(db) {
   function normalizeIdentityValue(value) {
     return String(value || "")
       .trim()
+      .replace(/&/g, " and ")
       .replace(/\s+/g, " ")
       .toLowerCase();
+  }
+
+  function normalizeAlbumTitleIdentity(value) {
+    return normalizeIdentityValue(value).replace(/[^a-z0-9]+/g, "");
   }
 
   function parseJsonValue(value, fallbackValue) {
@@ -572,7 +577,7 @@ function createCatalogRepository(db) {
 
   async function findReleaseByAlbumIdentity(title, artists, year, client) {
     const executor = getExecutor(client);
-    const normalizedTitle = normalizeIdentityValue(title);
+    const normalizedTitle = normalizeAlbumTitleIdentity(title);
     const normalizedArtistNames = (Array.isArray(artists) ? artists : [])
       .map((artist) => normalizeIdentityValue(artist.name))
       .filter(Boolean);
@@ -587,11 +592,10 @@ function createCatalogRepository(db) {
         FROM albums a
         INNER JOIN album_artists aa ON aa.album_id = a.id
         INNER JOIN artists ar ON ar.id = aa.artist_id
-        WHERE LOWER(TRIM(a.title)) = $1
-          AND ($2::int IS NULL OR a.year = $2 OR a.year IS NULL)
+        WHERE LOWER(REGEXP_REPLACE(a.title, '[^a-z0-9]+', '', 'gi')) = $1
         ORDER BY a.id ASC
       `,
-      [normalizedTitle, year || null]
+      [normalizedTitle]
     );
 
     for (const row of result.rows) {
@@ -604,9 +608,14 @@ function createCatalogRepository(db) {
         .map((artist) => normalizeIdentityValue(artist.name))
         .filter(Boolean);
 
+      const sortedReleaseArtistNames = [...releaseArtistNames].sort();
+      const sortedNormalizedArtistNames = [...normalizedArtistNames].sort();
+
       if (
-        releaseArtistNames.length === normalizedArtistNames.length &&
-        releaseArtistNames.every((artistName, index) => artistName === normalizedArtistNames[index])
+        sortedReleaseArtistNames.length === sortedNormalizedArtistNames.length &&
+        sortedReleaseArtistNames.every(
+          (artistName, index) => artistName === sortedNormalizedArtistNames[index]
+        )
       ) {
         return release;
       }

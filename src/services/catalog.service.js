@@ -23,8 +23,13 @@ function createCatalogService({
   function normalizeIdentityValue(value) {
     return String(value || "")
       .trim()
+      .replace(/&/g, " and ")
       .replace(/\s+/g, " ")
       .toLowerCase();
+  }
+
+  function normalizeIdentityToken(value) {
+    return normalizeIdentityValue(value).replace(/[^a-z0-9]+/g, "");
   }
 
   function toArtistSummary(artist) {
@@ -96,6 +101,49 @@ function createCatalogService({
     }
 
     return left.id - right.id;
+  }
+
+  function createAlbumIdentityKey(album) {
+    const artistNames = (Array.isArray(album && album.mainArtists) ? album.mainArtists : [])
+      .map((artist) => normalizeIdentityToken(artist && artist.name))
+      .filter(Boolean)
+      .sort()
+      .join("|");
+
+    return `${normalizeIdentityToken(album && album.title)}|${artistNames}`;
+  }
+
+  function dedupeAlbums(albums) {
+    const uniqueAlbums = new Map();
+
+    for (const album of Array.isArray(albums) ? albums : []) {
+      const identityKey = createAlbumIdentityKey(album);
+      if (!identityKey || uniqueAlbums.has(identityKey)) {
+        continue;
+      }
+
+      uniqueAlbums.set(identityKey, album);
+    }
+
+    return Array.from(uniqueAlbums.values());
+  }
+
+  function dedupeTrackAppearances(appearances) {
+    const uniqueAppearances = new Map();
+
+    for (const track of Array.isArray(appearances) ? appearances : []) {
+      const identityKey = createAlbumIdentityKey(track && track.album);
+      if (!identityKey) {
+        continue;
+      }
+
+      const current = uniqueAppearances.get(identityKey);
+      if (!current || sortTracksByEarliestAlbum(track, current) < 0) {
+        uniqueAppearances.set(identityKey, track);
+      }
+    }
+
+    return Array.from(uniqueAppearances.values()).sort(sortTracksByEarliestAlbum);
   }
 
   function extractArtistSourceIdFromResourceUrl(resourceUrl) {
@@ -206,7 +254,12 @@ function createCatalogService({
       return emptyProfile;
     }
 
-    const fetchedProfile = transformService.mapArtistProfile(await discogsService.fetchArtist(sourceId));
+    const fetchedProfile = transformService.mapArtistProfile(
+      await discogsService.fetchArtist(sourceId, {
+        artistName: artist.name,
+        reason: "artist profile enrichment",
+      })
+    );
     const storedArtist = await catalogRepository.saveArtistProfile(artist.id, fetchedProfile);
     const storedProfile = storedArtist ? mapStoredArtistProfile(storedArtist) : mapStoredArtistProfile(fetchedProfile);
 
@@ -261,9 +314,9 @@ function createCatalogService({
 
     const matchingTracks = await catalogRepository.findTracksByNormalizedTitle(baseTrack.title, 100);
     const identityKey = createTrackIdentityKey(baseTrack);
-    const appearances = matchingTracks
-      .filter((track) => createTrackIdentityKey(track) === identityKey)
-      .sort(sortTracksByEarliestAlbum);
+    const appearances = dedupeTrackAppearances(
+      matchingTracks.filter((track) => createTrackIdentityKey(track) === identityKey)
+    );
 
     const earliestAppearance = appearances[0] || baseTrack;
 
@@ -315,7 +368,8 @@ function createCatalogService({
       catalogRepository.getAlbumsByArtistRole(artistId, "featured"),
     ]);
 
-    const mainAlbumIds = new Set(mainAlbums.map((album) => album.id));
+    const dedupedMainAlbums = dedupeAlbums(mainAlbums.filter((album) => album.isVinyl !== false));
+    const mainAlbumIdentityKeys = new Set(dedupedMainAlbums.map(createAlbumIdentityKey));
 
     return {
       id: artist.id,
@@ -324,9 +378,13 @@ function createCatalogService({
       realName: profile.realName,
       genres,
       socials: profile.socials,
-      mainAlbums: mainAlbums.filter((album) => album.isVinyl !== false).map(toAlbumOverview),
-      featuredAlbums: featuredAlbums
-        .filter((album) => album.isVinyl !== false && !mainAlbumIds.has(album.id))
+      mainAlbums: dedupedMainAlbums.map(toAlbumOverview),
+      featuredAlbums: dedupeAlbums(
+        featuredAlbums.filter(
+          (album) =>
+            album.isVinyl !== false && !mainAlbumIdentityKeys.has(createAlbumIdentityKey(album))
+        )
+      )
         .map(toAlbumOverview),
     };
   }

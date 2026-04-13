@@ -18,6 +18,25 @@ function createDiscogsService(options = {}) {
   let nextAvailableAt = 0;
   let queue = Promise.resolve();
 
+  function cleanLogValue(value) {
+    if (value == null) {
+      return null;
+    }
+
+    const normalized = String(value).replace(/\s+/g, " ").trim();
+    return normalized || null;
+  }
+
+  function logDiscogsCall(action, details = {}) {
+    const parts = Object.entries(details)
+      .map(([key, value]) => [key, cleanLogValue(value)])
+      .filter(([, value]) => value)
+      .map(([key, value]) => `${key}=${value}`);
+
+    const suffix = parts.length > 0 ? ` | ${parts.join(" | ")}` : "";
+    console.info(`[Discogs] ${action}${suffix}`);
+  }
+
   function schedule(task) {
     const run = queue.then(async () => {
       const waitMs = Math.max(0, nextAvailableAt - Date.now());
@@ -37,8 +56,15 @@ function createDiscogsService(options = {}) {
     return run;
   }
 
-  async function fetchRelease(id) {
+  async function fetchRelease(id, metadata = {}) {
     return schedule(async () => {
+      logDiscogsCall("fetch release", {
+        id,
+        title: metadata.title,
+        artist: metadata.artistName,
+        reason: metadata.reason,
+      });
+
       const response = await fetchImpl(`${baseUrl}/releases/${id}`, {
         headers: {
           Authorization: `Discogs token=${token}`,
@@ -69,6 +95,13 @@ function createDiscogsService(options = {}) {
   }
 
   async function searchReleases(query, options = {}) {
+    logDiscogsCall("search releases", {
+      query,
+      perPage: options.perPage || 10,
+      page: options.page || 1,
+      reason: options.reason,
+    });
+
     const params = new URLSearchParams({
       q: query,
       type: "release",
@@ -102,8 +135,14 @@ function createDiscogsService(options = {}) {
     });
   }
 
-  async function fetchArtist(id) {
+  async function fetchArtist(id, metadata = {}) {
     return schedule(async () => {
+      logDiscogsCall("fetch artist", {
+        id,
+        artist: metadata.artistName,
+        reason: metadata.reason,
+      });
+
       const response = await fetchImpl(`${baseUrl}/artists/${id}`, {
         headers: {
           Authorization: `Discogs token=${token}`,

@@ -146,9 +146,16 @@ function createTransformService() {
     };
   }
 
+  function normalizeIdentityToken(value) {
+    return String(cleanText(value) || "")
+      .replace(/&/g, " and ")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "");
+  }
+
   function createSearchCandidateKey(candidate) {
-    return [candidate.artistName || "", candidate.title || "", candidate.year || ""]
-      .map((part) => String(part).trim().toLowerCase())
+    return [candidate.artistName || "", candidate.title || ""]
+      .map((part) => normalizeIdentityToken(part))
       .join("|");
   }
 
